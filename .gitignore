@@ -1,0 +1,39 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.egg-info/
+dist/
+build/
+*.egg
+
+# Virtual environment
+venv/
+.venv/
+
+# Environment variables
+.env
+
+# YOLO model weights (downloaded at runtime)
+*.pt
+
+# Data (large / private)
+data/shp/
+data/roi_tests/
+data/rois/
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Claude
+.claude/
+CLAUDE.md
+
+# Test scripts (project-specific)
+test_roi_*.py
+clearguide_api.py

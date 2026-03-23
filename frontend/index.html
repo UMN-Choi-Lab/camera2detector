@@ -1,0 +1,161 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Camera2Detector - MnDOT Dashboard</title>
+
+    <!-- Leaflet -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
+    <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
+
+    <link rel="stylesheet" href="/css/style.css" />
+</head>
+<body>
+    <div id="app">
+        <!-- Left panel: Map -->
+        <div id="map-panel">
+            <div id="map"></div>
+        </div>
+
+        <!-- Right panel: Camera details -->
+        <div id="detail-panel">
+            <div id="detail-placeholder">
+                <h2>MnDOT Camera2Detector</h2>
+                <p>Click a camera on the map to view live analysis</p>
+                <p class="subtext">I-94 corridor cameras</p>
+            </div>
+
+            <div id="detail-content" class="hidden">
+                <!-- Camera header -->
+                <div id="camera-header">
+                    <h3 id="camera-name"></h3>
+                    <span id="camera-id-badge"></span>
+                </div>
+
+                <!-- Camera image with CV overlay -->
+                <div id="camera-view">
+                    <img id="camera-image" alt="Camera feed" />
+                    <canvas id="cv-overlay"></canvas>
+                </div>
+
+                <!-- Stat cards -->
+                <div id="stat-cards">
+                    <div class="stat-card cv">
+                        <div class="stat-label">CV Count</div>
+                        <div class="stat-value" id="cv-count">--</div>
+                    </div>
+                    <div class="stat-card cv">
+                        <div class="stat-label">CV Occupancy</div>
+                        <div class="stat-value" id="cv-occupancy">--</div>
+                    </div>
+                    <div class="stat-card det">
+                        <div class="stat-label">Det Count</div>
+                        <div class="stat-value" id="det-count">--</div>
+                    </div>
+                    <div class="stat-card det">
+                        <div class="stat-label">Det Occupancy</div>
+                        <div class="stat-value" id="det-occupancy">--</div>
+                    </div>
+                </div>
+
+                <!-- ROI section -->
+                <div id="roi-section" class="hidden">
+                    <div id="roi-header">
+                        <h4>Road ROIs</h4>
+                        <div id="roi-buttons">
+                            <button id="roi-generate-btn">Auto-Generate</button>
+                            <button id="roi-edit-btn">Edit ROIs</button>
+                        </div>
+                    </div>
+                    <div id="roi-status"></div>
+                    <div id="roi-list"></div>
+
+                    <!-- ROI editor panel (hidden by default) -->
+                    <div id="roi-editor" class="hidden">
+                        <p class="roi-editor-hint">Click on the image to place vertices. Click near the first vertex to close the polygon.</p>
+                        <div class="roi-editor-form">
+                            <input type="text" id="roi-road-name" placeholder="Road name (e.g., I-94)" />
+                            <select id="roi-direction">
+                                <option value="">Direction</option>
+                                <option value="NB">NB</option>
+                                <option value="SB">SB</option>
+                                <option value="EB">EB</option>
+                                <option value="WB">WB</option>
+                            </select>
+                            <button id="roi-save-polygon-btn" disabled>Save Polygon</button>
+                            <button id="roi-cancel-polygon-btn">Cancel</button>
+                        </div>
+                        <button id="roi-done-btn">Done Editing</button>
+                    </div>
+                </div>
+
+                <!-- Road breakdown -->
+                <div id="road-breakdown" class="hidden">
+                    <h4>Road Breakdown</h4>
+                    <div id="road-badges"></div>
+                </div>
+
+                <!-- Road legend -->
+                <div id="road-legend" class="hidden">
+                    <div id="road-legend-items"></div>
+                </div>
+
+                <!-- Historical comparison -->
+                <div id="history-section" class="hidden">
+                    <h4>Historical Comparison</h4>
+                    <div id="history-controls">
+                        <input type="date" id="history-date" />
+                        <button id="history-load-btn">Load</button>
+                    </div>
+                </div>
+
+                <!-- Time-series charts -->
+                <div id="charts">
+                    <div class="chart-container">
+                        <canvas id="count-chart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="occupancy-chart"></canvas>
+                    </div>
+                    <div class="chart-container">
+                        <canvas id="speed-chart"></canvas>
+                    </div>
+                </div>
+
+                <!-- Matched detectors table -->
+                <div id="detectors-section">
+                    <h4>Matched Detectors</h4>
+                    <div id="detectors-table-wrap">
+                        <table id="detectors-table">
+                            <thead>
+                                <tr>
+                                    <th>ID</th>
+                                    <th>Label</th>
+                                    <th>Dist (m)</th>
+                                    <th>Lane</th>
+                                    <th>Corridor</th>
+                                </tr>
+                            </thead>
+                            <tbody></tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Scripts -->
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="/js/utils.js"></script>
+    <script src="/js/map.js"></script>
+    <script src="/js/camera_panel.js"></script>
+    <script src="/js/charts.js?v=3"></script>
+    <script src="/js/sse_client.js"></script>
+    <script src="/js/roi_editor.js"></script>
+    <script src="/js/app.js?v=3"></script>
+</body>
+</html>

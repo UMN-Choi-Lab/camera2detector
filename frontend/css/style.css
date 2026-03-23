@@ -1,0 +1,575 @@
+* {
+    margin: 0;
+    padding: 0;
+    box-sizing: border-box;
+}
+
+body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #1a1a2e;
+    color: #e0e0e0;
+    overflow: hidden;
+    height: 100vh;
+}
+
+#app {
+    display: flex;
+    height: 100vh;
+}
+
+/* Map panel */
+#map-panel {
+    flex: 6;
+    position: relative;
+}
+
+#map {
+    width: 100%;
+    height: 100%;
+}
+
+/* Detail panel */
+#detail-panel {
+    flex: 4;
+    background: #16213e;
+    overflow-y: auto;
+    border-left: 2px solid #0f3460;
+}
+
+#detail-placeholder {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    height: 100%;
+    text-align: center;
+    padding: 2rem;
+}
+
+#detail-placeholder h2 {
+    color: #e94560;
+    margin-bottom: 0.5rem;
+    font-size: 1.5rem;
+}
+
+#detail-placeholder .subtext {
+    color: #888;
+    font-size: 0.85rem;
+    margin-top: 0.5rem;
+}
+
+.hidden {
+    display: none !important;
+}
+
+/* Camera header */
+#camera-header {
+    padding: 0.75rem 1rem;
+    background: #0f3460;
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+}
+
+#camera-header h3 {
+    font-size: 1rem;
+    color: #fff;
+}
+
+#camera-id-badge {
+    background: #e94560;
+    color: #fff;
+    padding: 0.15rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.75rem;
+    font-weight: 600;
+}
+
+/* Camera view */
+#camera-view {
+    position: relative;
+    width: 100%;
+    background: #000;
+}
+
+#camera-image {
+    width: 100%;
+    display: block;
+}
+
+#cv-overlay {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+/* Stat cards */
+#stat-cards {
+    display: grid;
+    grid-template-columns: repeat(4, 1fr);
+    gap: 0.5rem;
+    padding: 0.75rem 1rem;
+}
+
+.stat-card {
+    background: #1a1a2e;
+    border-radius: 6px;
+    padding: 0.5rem;
+    text-align: center;
+}
+
+.stat-card.cv {
+    border-top: 3px solid #4ecca3;
+}
+
+.stat-card.det {
+    border-top: 3px solid #e94560;
+}
+
+.stat-label {
+    font-size: 0.65rem;
+    text-transform: uppercase;
+    color: #888;
+    margin-bottom: 0.25rem;
+}
+
+.stat-value {
+    font-size: 1.25rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+/* Road breakdown */
+#road-breakdown {
+    padding: 0.5rem 1rem;
+}
+
+#road-breakdown h4 {
+    color: #4ecca3;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+}
+
+#road-badges {
+    display: flex;
+    flex-direction: column;
+    gap: 0.35rem;
+}
+
+.road-badge {
+    background: #1a1a2e;
+    border-radius: 6px;
+    padding: 0.4rem 0.6rem;
+    border-left: 4px solid #4ecca3;
+}
+
+.road-badge-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+.road-badge-name {
+    font-weight: 600;
+    font-size: 0.85rem;
+}
+
+.road-badge-count {
+    font-size: 1.1rem;
+    font-weight: 700;
+    color: #fff;
+}
+
+.road-badge-detail {
+    font-size: 0.7rem;
+    color: #888;
+    margin-top: 0.15rem;
+}
+
+/* Road legend */
+#road-legend {
+    padding: 0.35rem 1rem;
+}
+
+#road-legend-items {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+}
+
+.road-legend-item {
+    display: flex;
+    align-items: center;
+    gap: 0.3rem;
+    font-size: 0.75rem;
+    color: #ccc;
+}
+
+.road-legend-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 4px;
+    border-radius: 2px;
+}
+
+/* Historical comparison */
+#history-section {
+    padding: 0.5rem 1rem;
+}
+
+#history-section h4 {
+    color: #fbbf24;
+    margin-bottom: 0.4rem;
+    font-size: 0.85rem;
+}
+
+#history-controls {
+    display: flex;
+    gap: 0.5rem;
+    align-items: center;
+}
+
+#history-date {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.8rem;
+}
+
+#history-load-btn {
+    background: #fbbf24;
+    color: #1a1a2e;
+    border: none;
+    border-radius: 4px;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.8rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#history-load-btn:hover {
+    background: #f59e0b;
+}
+
+#history-load-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+/* Charts */
+#charts {
+    padding: 0.5rem 1rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.5rem;
+}
+
+.chart-container {
+    background: #1a1a2e;
+    border-radius: 6px;
+    padding: 0.5rem;
+    height: 300px;
+}
+
+.chart-container canvas {
+    width: 100% !important;
+    height: 100% !important;
+}
+
+/* Detectors table */
+#detectors-section {
+    padding: 0.75rem 1rem;
+}
+
+#detectors-section h4 {
+    color: #e94560;
+    margin-bottom: 0.5rem;
+    font-size: 0.85rem;
+}
+
+#detectors-table-wrap {
+    max-height: 200px;
+    overflow-y: auto;
+}
+
+#detectors-table {
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 0.75rem;
+}
+
+#detectors-table th {
+    background: #0f3460;
+    padding: 0.4rem;
+    text-align: left;
+    position: sticky;
+    top: 0;
+}
+
+#detectors-table td {
+    padding: 0.35rem 0.4rem;
+    border-bottom: 1px solid #1a1a2e;
+}
+
+#detectors-table tbody tr:hover {
+    background: rgba(233, 69, 96, 0.1);
+}
+
+/* ROI section */
+#roi-section {
+    padding: 0.5rem 1rem;
+}
+
+#roi-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 0.4rem;
+}
+
+#roi-header h4 {
+    color: #a855f7;
+    font-size: 0.85rem;
+}
+
+#roi-buttons {
+    display: flex;
+    gap: 0.4rem;
+}
+
+#roi-generate-btn {
+    background: #a855f7;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#roi-generate-btn:hover {
+    background: #9333ea;
+}
+
+#roi-generate-btn:disabled {
+    opacity: 0.5;
+    cursor: not-allowed;
+}
+
+#roi-edit-btn {
+    background: transparent;
+    color: #a855f7;
+    border: 1px solid #a855f7;
+    border-radius: 4px;
+    padding: 0.25rem 0.6rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+}
+
+#roi-edit-btn:hover {
+    background: rgba(168, 85, 247, 0.1);
+}
+
+#roi-status {
+    font-size: 0.75rem;
+    color: #888;
+    margin-bottom: 0.3rem;
+}
+
+#roi-list {
+    display: flex;
+    flex-direction: column;
+    gap: 0.25rem;
+}
+
+.roi-list-item {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    background: #1a1a2e;
+    border-radius: 4px;
+    padding: 0.3rem 0.5rem;
+    font-size: 0.75rem;
+}
+
+.roi-list-label {
+    display: flex;
+    align-items: center;
+    gap: 0.4rem;
+}
+
+.roi-color-swatch {
+    display: inline-block;
+    width: 12px;
+    height: 12px;
+    border-radius: 3px;
+}
+
+.roi-delete-btn {
+    background: transparent;
+    color: #ef4444;
+    border: none;
+    cursor: pointer;
+    font-size: 0.7rem;
+    padding: 0.1rem 0.3rem;
+}
+
+.roi-delete-btn:hover {
+    color: #f87171;
+}
+
+/* ROI editor panel */
+#roi-editor {
+    margin-top: 0.5rem;
+    padding: 0.5rem;
+    border-left: 3px solid #a855f7;
+    background: rgba(168, 85, 247, 0.05);
+    border-radius: 0 4px 4px 0;
+}
+
+.roi-editor-hint {
+    font-size: 0.7rem;
+    color: #a855f7;
+    margin-bottom: 0.4rem;
+}
+
+.roi-editor-form {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    margin-bottom: 0.4rem;
+}
+
+.roi-editor-form input,
+.roi-editor-form select {
+    background: #1a1a2e;
+    color: #e0e0e0;
+    border: 1px solid #0f3460;
+    border-radius: 4px;
+    padding: 0.25rem 0.4rem;
+    font-size: 0.75rem;
+}
+
+.roi-editor-form input {
+    flex: 1;
+    min-width: 100px;
+}
+
+#roi-save-polygon-btn {
+    background: #a855f7;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+#roi-save-polygon-btn:disabled {
+    opacity: 0.4;
+    cursor: not-allowed;
+}
+
+#roi-cancel-polygon-btn {
+    background: transparent;
+    color: #888;
+    border: 1px solid #555;
+    border-radius: 4px;
+    padding: 0.25rem 0.5rem;
+    font-size: 0.75rem;
+    cursor: pointer;
+}
+
+#roi-done-btn {
+    background: #10b981;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    padding: 0.3rem 0.75rem;
+    font-size: 0.75rem;
+    font-weight: 600;
+    cursor: pointer;
+    margin-top: 0.3rem;
+}
+
+#roi-done-btn:hover {
+    background: #059669;
+}
+
+/* Leaflet camera marker */
+.camera-marker {
+    background: #4ecca3;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    width: 12px;
+    height: 12px;
+}
+
+.camera-marker.active {
+    background: #e94560;
+    width: 16px;
+    height: 16px;
+    border-width: 3px;
+}
+
+.detector-marker {
+    background: #e94560;
+    border: 2px solid #fff;
+    border-radius: 50%;
+    width: 10px;
+    height: 10px;
+}
+
+/* Scrollbar */
+#detail-panel::-webkit-scrollbar,
+#detectors-table-wrap::-webkit-scrollbar {
+    width: 6px;
+}
+
+#detail-panel::-webkit-scrollbar-track,
+#detectors-table-wrap::-webkit-scrollbar-track {
+    background: #16213e;
+}
+
+#detail-panel::-webkit-scrollbar-thumb,
+#detectors-table-wrap::-webkit-scrollbar-thumb {
+    background: #0f3460;
+    border-radius: 3px;
+}
+
+/* Leaflet overrides for dark theme */
+.leaflet-container {
+    background: #1a1a2e;
+}
+
+.leaflet-popup-content-wrapper {
+    background: #16213e;
+    color: #e0e0e0;
+    border-radius: 6px;
+}
+
+.leaflet-popup-tip {
+    background: #16213e;
+}
+
+/* Loading spinner */
+.loading-spinner {
+    display: inline-block;
+    width: 20px;
+    height: 20px;
+    border: 2px solid #888;
+    border-top-color: #4ecca3;
+    border-radius: 50%;
+    animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+    to { transform: rotate(360deg); }
+}
