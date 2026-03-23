@@ -37,3 +37,5 @@ CLAUDE.md
 # Test scripts (project-specific)
 test_roi_*.py
 clearguide_api.py
+shp_trans_roads_centerlines.zip
+detectors.xlsx
