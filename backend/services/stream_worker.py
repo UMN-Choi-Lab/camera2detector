@@ -206,7 +206,7 @@ class FrameReader:
     absorbs the burst so the worker can consume at a steady rate.
     """
 
-    def __init__(self, url: str, max_queue: int = 150):
+    def __init__(self, url: str, max_queue: int = 120):
         self._url = url
         self._cap: cv2.VideoCapture | None = None
         self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
@@ -220,32 +220,54 @@ class FrameReader:
         self._thread.start()
 
     def _run(self):
-        """Read all frames from HLS as fast as FFmpeg delivers them."""
-        try:
-            self._cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
-            if not self._cap.isOpened():
-                self._error = f"Cannot open HLS: {self._url}"
-                return
+        """Read frames from HLS with automatic reconnection."""
+        import os
+        os.environ['OPENCV_FFMPEG_CAPTURE_OPTIONS'] = (
+            'rw_timeout;5000000|timeout;5000000'  # 5s timeouts (µs)
+        )
 
-            self._connected = True
-            while not self._should_stop:
-                ret, frame = self._cap.read()
-                if not ret:
-                    self._error = "HLS read failed"
-                    break
-                # Block if queue is full — backpressure to FFmpeg
-                # (this naturally throttles to consumer rate)
-                try:
-                    self._queue.put(frame, timeout=5.0)
-                except queue.Full:
-                    # Consumer is too slow; drop this frame
-                    pass
-        except Exception as e:
-            self._error = str(e)
-        finally:
-            if self._cap is not None:
-                self._cap.release()
-            self._connected = False
+        while not self._should_stop:
+            try:
+                self._cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
+                if not self._cap.isOpened():
+                    self._error = f"Cannot open HLS: {self._url}"
+                    time.sleep(2)
+                    continue
+
+                self._connected = True
+                self._error = None
+                read_interval = 1.0 / (self._cap.get(cv2.CAP_PROP_FPS) or 30.0)
+
+                while not self._should_stop:
+                    t0 = time.time()
+                    ret, frame = self._cap.read()
+                    if not ret:
+                        break  # Inner loop — reconnect
+                    try:
+                        self._queue.put_nowait(frame)
+                    except queue.Full:
+                        try:
+                            self._queue.get_nowait()
+                        except queue.Empty:
+                            pass
+                        self._queue.put_nowait(frame)
+                    elapsed = time.time() - t0
+                    sleep_time = read_interval - elapsed
+                    if sleep_time > 0:
+                        time.sleep(sleep_time)
+
+            except Exception as e:
+                self._error = str(e)
+            finally:
+                if self._cap is not None:
+                    self._cap.release()
+                    self._cap = None
+                self._connected = False
+
+            # Quick reconnect — don't wait 30s
+            if not self._should_stop:
+                logger.warning("HLS reconnecting for %s", self._url)
+                time.sleep(1)
 
     def get_frame(self, timeout: float = 1.0) -> np.ndarray | None:
         """Get the next frame in order (blocks until available or timeout)."""
@@ -390,53 +412,60 @@ class StreamWorker:
         now = time.time()
         window_end = (now // settings.aggregation_window_s + 1) * settings.aggregation_window_s
 
-        # Track every Nth frame (YOLO is ~5ms but we want headroom)
-        track_every_n = max(1, round(30.0 / settings.hls_target_fps))  # e.g., 2 at 15fps target
+        # Run YOLO on every frame (no skipping — the output rate IS the tracking rate)
         frame_counter = 0
         last_detections: list[dict] = []
-        output_interval = 1.0 / 30.0  # Target 30fps MJPEG output
+        output_interval = 1.0 / settings.hls_target_fps  # 15fps default
+
+        last_frame = None  # Keep last frame for re-serving during queue gaps
 
         try:
             while not self._stop_event.is_set():
                 t0 = time.monotonic()
 
-                # Pop next frame in order from the jitter buffer
-                frame = await asyncio.to_thread(reader.get_frame, 2.0)
+                # Pop next frame from jitter buffer (short timeout)
+                frame = await asyncio.to_thread(reader.get_frame, 0.1)
                 if frame is None:
                     if not reader.is_alive:
                         raise ConnectionError(reader._error or "HLS stream disconnected")
+                    # Queue empty — re-serve last frame to keep MJPEG alive
+                    if last_frame is not None and self._mjpeg_subscribers > 0:
+                        self._frame_seq += 1
+                        async with self._frame_cond:
+                            self._frame_cond.notify_all()
+                    await asyncio.sleep(output_interval)
                     continue
 
+                last_frame = frame
                 frame_counter += 1
                 self.frames_processed += 1
 
-                # Run YOLO tracking on every Nth frame
-                if frame_counter % track_every_n == 0:
-                    async with self._gpu_semaphore:
-                        last_detections = await asyncio.to_thread(
-                            self._track_frame, frame
+                # Run YOLO tracking on every frame
+                async with self._gpu_semaphore:
+                    last_detections = await asyncio.to_thread(
+                        self._track_frame, frame
+                    )
+
+                accumulator.add_frame(last_detections)
+
+                # Update trajectory trails
+                self._trail_frame_counter += 1
+                for det in last_detections:
+                    tid = det.get("track_id")
+                    if tid is not None:
+                        self._track_trails[tid].append(
+                            (int(det["cx"]), int(det["cy"]))
                         )
-
-                    accumulator.add_frame(last_detections)
-
-                    # Update trajectory trails
-                    self._trail_frame_counter += 1
-                    for det in last_detections:
-                        tid = det.get("track_id")
-                        if tid is not None:
-                            self._track_trails[tid].append(
-                                (int(det["cx"]), int(det["cy"]))
-                            )
-                            self._track_last_frame[tid] = self._trail_frame_counter
-                    # Purge stale trails
-                    stale = [
-                        tid
-                        for tid, last in self._track_last_frame.items()
-                        if self._trail_frame_counter - last > 45
-                    ]
-                    for tid in stale:
-                        self._track_trails.pop(tid, None)
-                        self._track_last_frame.pop(tid, None)
+                        self._track_last_frame[tid] = self._trail_frame_counter
+                # Purge stale trails
+                stale = [
+                    tid
+                    for tid, last in self._track_last_frame.items()
+                    if self._trail_frame_counter - last > 45
+                ]
+                for tid in stale:
+                    self._track_trails.pop(tid, None)
+                    self._track_last_frame.pop(tid, None)
 
                 # Publish per-frame tracking data
                 trails_snapshot = {
@@ -516,11 +545,13 @@ class StreamWorker:
                     accumulator = FrameAccumulator(self.camera_id, roi_polygons)
                     window_end += settings.aggregation_window_s
 
-                # Pace output at ~30fps (smooth playback)
-                elapsed = time.monotonic() - t0
-                sleep_time = output_interval - elapsed
-                if sleep_time > 0:
-                    await asyncio.sleep(sleep_time)
+                # Pace output — only sleep when queue has enough buffer
+                # If queue is low, process faster to prevent drain
+                if reader.queued > 30:
+                    elapsed = time.monotonic() - t0
+                    sleep_time = output_interval - elapsed
+                    if sleep_time > 0:
+                        await asyncio.sleep(sleep_time)
         finally:
             reader.request_stop()  # Signal stop — reader thread releases cap itself
             reader.join(timeout=5.0)
