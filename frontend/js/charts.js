@@ -110,6 +110,14 @@ const Charts = {
                 labels: [],
                 datasets: [
                     {
+                        label: 'CV Speed (mph)',
+                        data: [],
+                        borderColor: '#4ecca3',
+                        backgroundColor: 'rgba(78, 204, 163, 0.1)',
+                        tension: 0.3,
+                        pointRadius: 3,
+                    },
+                    {
                         label: 'MnDOT Speed (mph)',
                         data: [],
                         borderColor: '#e94560',
@@ -150,9 +158,9 @@ const Charts = {
             chart.data.datasets.forEach(ds => { ds.data = []; });
             chart.update('none');
         });
-        // Speed chart: keep first 2 datasets (MnDOT + ClearGuide)
+        // Speed chart: keep first 3 datasets (CV + MnDOT + ClearGuide)
         this.speedChart.data.labels = [];
-        this.speedChart.data.datasets = this.speedChart.data.datasets.slice(0, 2);
+        this.speedChart.data.datasets = this.speedChart.data.datasets.slice(0, 3);
         this.speedChart.data.datasets.forEach(ds => { ds.data = []; });
         this.speedChart.update('none');
 
@@ -184,17 +192,22 @@ const Charts = {
     },
 
     /**
-     * Add MnDOT detector speed data point to speed chart.
+     * Add speed data point to speed chart.
+     * @param {string} timestamp
+     * @param {number|null} detSpeed - MnDOT detector speed
+     * @param {number|null} cvSpeed - CV-estimated speed
      */
-    addSpeedDataPoint(timestamp, detSpeed) {
+    addSpeedDataPoint(timestamp, detSpeed, cvSpeed) {
         const label = Utils.formatTime(timestamp);
 
         this.speedChart.data.labels.push(label);
-        this.speedChart.data.datasets[0].data.push(detSpeed);
-
-        // ClearGuide dataset: push null to keep aligned (overlay fills separately)
-        if (this.speedChart.data.datasets[1].data.length < this.speedChart.data.labels.length) {
-            this.speedChart.data.datasets[1].data.push(null);
+        // Dataset 0: CV Speed
+        this.speedChart.data.datasets[0].data.push(cvSpeed != null ? Math.round(cvSpeed) : null);
+        // Dataset 1: MnDOT Speed
+        this.speedChart.data.datasets[1].data.push(detSpeed);
+        // Dataset 2: ClearGuide — push null to keep aligned (overlay fills separately)
+        if (this.speedChart.data.datasets[2].data.length < this.speedChart.data.labels.length) {
+            this.speedChart.data.datasets[2].data.push(null);
         }
 
         if (this.speedChart.data.labels.length > this.maxPoints) {
@@ -211,6 +224,8 @@ const Charts = {
     setClearGuideOverlay(dataPoints) {
         if (!dataPoints || dataPoints.length === 0) return;
 
+        const cgIdx = 2; // ClearGuide is dataset index 2
+
         // If speed chart has no labels yet, use ClearGuide timestamps
         if (this.speedChart.data.labels.length === 0) {
             this.speedChart.data.labels = dataPoints.map(p => {
@@ -218,13 +233,12 @@ const Charts = {
                 return d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
             });
             this.speedChart.data.datasets[0].data = new Array(dataPoints.length).fill(null);
-            this.speedChart.data.datasets[1].data = dataPoints.map(p => p.speed);
+            this.speedChart.data.datasets[1].data = new Array(dataPoints.length).fill(null);
+            this.speedChart.data.datasets[cgIdx].data = dataPoints.map(p => p.speed);
         } else {
-            // Match ClearGuide data to existing labels by finding closest time
-            const cgDs = this.speedChart.data.datasets[1];
+            const cgDs = this.speedChart.data.datasets[cgIdx];
             cgDs.data = new Array(this.speedChart.data.labels.length).fill(null);
 
-            // Simple approach: spread ClearGuide values across existing labels
             for (const pt of dataPoints) {
                 const ptTime = new Date(typeof pt.ts === 'number' ? pt.ts * 1000 : pt.ts);
                 const ptLabel = ptTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });

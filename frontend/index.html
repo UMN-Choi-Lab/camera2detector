@@ -34,7 +34,7 @@
                     <span id="camera-id-badge"></span>
                 </div>
 
-                <!-- Camera image with CV overlay -->
+                <!-- Camera video with CV overlay -->
                 <div id="camera-view">
                     <img id="camera-image" alt="Camera feed" />
                     <canvas id="cv-overlay"></canvas>
@@ -43,20 +43,39 @@
                 <!-- Stat cards -->
                 <div id="stat-cards">
                     <div class="stat-card cv">
-                        <div class="stat-label">CV Count</div>
+                        <div class="stat-label">CV Volume</div>
                         <div class="stat-value" id="cv-count">--</div>
                     </div>
                     <div class="stat-card cv">
                         <div class="stat-label">CV Occupancy</div>
                         <div class="stat-value" id="cv-occupancy">--</div>
                     </div>
+                    <div class="stat-card cv">
+                        <div class="stat-label">CV Speed</div>
+                        <div class="stat-value" id="cv-speed">--</div>
+                    </div>
                     <div class="stat-card det">
-                        <div class="stat-label">Det Count</div>
+                        <div class="stat-label">Det Volume</div>
                         <div class="stat-value" id="det-count">--</div>
                     </div>
                     <div class="stat-card det">
                         <div class="stat-label">Det Occupancy</div>
                         <div class="stat-value" id="det-occupancy">--</div>
+                    </div>
+                    <div class="stat-card det">
+                        <div class="stat-label">Det Speed</div>
+                        <div class="stat-value" id="det-speed">--</div>
+                    </div>
+                </div>
+
+                <!-- Stream info bar -->
+                <div id="stream-info" class="hidden">
+                    <span id="stream-status-badge" class="stream-badge">LIVE</span>
+                    <span id="stream-fps">-- fps</span>
+                    <span id="stream-frames">-- frames</span>
+                    <span id="stream-countdown">Next in --s</span>
+                    <div id="stream-progress-wrap">
+                        <div id="stream-progress-bar"></div>
                     </div>
                 </div>
 
@@ -150,12 +169,13 @@
     <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
     <script src="https://unpkg.com/leaflet.markercluster@1.5.3/dist/leaflet.markercluster.js"></script>
     <script src="https://cdn.jsdelivr.net/npm/chart.js@4"></script>
+    <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
     <script src="/js/utils.js"></script>
     <script src="/js/map.js"></script>
-    <script src="/js/camera_panel.js"></script>
-    <script src="/js/charts.js?v=3"></script>
+    <script src="/js/camera_panel.js?v=5"></script>
+    <script src="/js/charts.js?v=5"></script>
     <script src="/js/sse_client.js"></script>
     <script src="/js/roi_editor.js"></script>
-    <script src="/js/app.js?v=3"></script>
+    <script src="/js/app.js?v=5"></script>
 </body>
 </html>

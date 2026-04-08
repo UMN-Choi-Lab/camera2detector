@@ -55,11 +55,47 @@ class DetectorSample(BaseModel):
     speed: float | None = None
 
 
+class StationAggregate(BaseModel):
+    """Aggregated detector data for one station (one direction)."""
+    station_label: str
+    direction: str  # EB, WB, NB, SB
+    volume: float | None = None  # Sum across lanes
+    occupancy: float | None = None  # Average across lanes
+    speed: float | None = None  # Average across lanes
+    lane_count: int = 0
+    detector_ids: list[str] = []
+
+
+class DetectorEquivalent(BaseModel):
+    """One virtual loop detector for one ROI in one 30s interval."""
+    roi_id: str
+    road_name: str
+    direction: str
+    volume: int
+    occupancy: float
+    speed: float | None = None
+    by_type: dict[str, int] = {}
+
+
+class IntervalResult(BaseModel):
+    """Complete 30s aggregation result for one camera."""
+    camera_id: str
+    interval_start: str
+    interval_end: str
+    frame_count: int
+    fps_actual: float
+    detectors: list[DetectorEquivalent]
+    total_volume: int
+    total_occupancy: float
+
+
 class SSEEvent(BaseModel):
     camera_id: str
     timestamp: str
     cv: CVResult
     detectors: list[DetectorSample]
+    stations: list[StationAggregate] = []
+    interval: IntervalResult | None = None
 
 
 class CameraWithDetectors(BaseModel):

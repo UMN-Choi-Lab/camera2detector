@@ -11,3 +11,5 @@ clickhouse-connect>=0.7.0
 scipy>=1.14.0
 openai>=1.30.0
 shapely>=2.0.0
+opencv-python-headless>=4.9.0
+lap>=0.5.12

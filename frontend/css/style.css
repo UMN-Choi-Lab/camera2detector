@@ -109,7 +109,7 @@ body {
 /* Stat cards */
 #stat-cards {
     display: grid;
-    grid-template-columns: repeat(4, 1fr);
+    grid-template-columns: repeat(3, 1fr);
     gap: 0.5rem;
     padding: 0.75rem 1rem;
 }
@@ -140,6 +140,54 @@ body {
     font-size: 1.25rem;
     font-weight: 700;
     color: #fff;
+}
+
+/* Stream info bar */
+#stream-info {
+    display: flex;
+    align-items: center;
+    gap: 0.75rem;
+    padding: 0.35rem 1rem;
+    font-size: 0.7rem;
+    color: #888;
+    background: #1a1a2e;
+    margin: 0 1rem;
+    border-radius: 4px;
+}
+
+.stream-badge {
+    background: #10b981;
+    color: #fff;
+    font-weight: 700;
+    font-size: 0.6rem;
+    padding: 0.1rem 0.4rem;
+    border-radius: 3px;
+    letter-spacing: 0.05em;
+}
+
+.stream-badge.connecting {
+    background: #f59e0b;
+}
+
+.stream-badge.error {
+    background: #e94560;
+}
+
+#stream-progress-wrap {
+    flex: 1;
+    height: 6px;
+    background: rgba(255, 255, 255, 0.08);
+    border-radius: 3px;
+    overflow: hidden;
+    min-width: 60px;
+}
+
+#stream-progress-bar {
+    height: 100%;
+    width: 0%;
+    background: linear-gradient(90deg, #4ecca3, #3b82f6);
+    border-radius: 3px;
+    transition: width 1s linear;
 }
 
 /* Road breakdown */

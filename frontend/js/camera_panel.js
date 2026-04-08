@@ -26,8 +26,7 @@ const CameraPanel = {
         document.getElementById('camera-name').textContent = cameraName;
         document.getElementById('camera-id-badge').textContent = cameraId;
 
-        // Load camera image
-        this.loadImage(cameraId);
+        // Video will be started by startHlsStream() from app.js
 
         // Populate detectors table
         this._populateDetectors(detectors);
@@ -35,24 +34,145 @@ const CameraPanel = {
         // Reset stat cards
         document.getElementById('cv-count').textContent = '--';
         document.getElementById('cv-occupancy').textContent = '--';
+        document.getElementById('cv-speed').textContent = '--';
         document.getElementById('det-count').textContent = '--';
         document.getElementById('det-occupancy').textContent = '--';
+        document.getElementById('det-speed').textContent = '--';
 
-        // Hide road breakdown until data arrives
+        // Hide road breakdown and stream info until data arrives
         document.getElementById('road-breakdown').classList.add('hidden');
+        document.getElementById('stream-info').classList.add('hidden');
     },
 
     setRoadColorMap(colorMap) {
         this.roadColorMap = colorMap || {};
     },
 
-    loadImage(cameraId) {
-        this.imageEl.src = `/api/camera/${cameraId}/image?t=${Date.now()}`;
-        this.imageEl.onload = () => {
-            this.canvasEl.width = this.imageEl.naturalWidth;
-            this.canvasEl.height = this.imageEl.naturalHeight;
-            this.clearOverlay();
-        };
+    /**
+     * Start MJPEG live stream for the given camera.
+     * Annotations (boxes, trails, ROIs) are rendered server-side.
+     */
+    startMjpegStream(cameraId) {
+        this.stopMjpegStream();
+        this._mjpegCameraId = cameraId;
+        this.imageEl.src = `/api/stream/${cameraId}`;
+    },
+
+    /**
+     * Stop MJPEG stream.
+     */
+    stopMjpegStream() {
+        this._mjpegCameraId = null;
+        this.imageEl.src = '';
+        this.clearOverlay();
+    },
+
+    /**
+     * Draw tracking data (boxes + trails + ROIs) on canvas overlay.
+     * (Kept for potential future use with HLS mode)
+     */
+    _drawTrackingOverlay(data) {
+        const vw = this.videoEl.videoWidth || 720;
+        const vh = this.videoEl.videoHeight || 480;
+        if (this.canvasEl.width !== vw) this.canvasEl.width = vw;
+        if (this.canvasEl.height !== vh) this.canvasEl.height = vh;
+
+        const ctx = this.ctx;
+        ctx.clearRect(0, 0, vw, vh);
+
+        // Draw ROI polygons
+        (data.rois || []).forEach(roi => {
+            const poly = roi.polygon;
+            if (!poly || poly.length < 3) return;
+            const color = roi.color || '#a855f7';
+
+            // Fill
+            ctx.save();
+            ctx.globalAlpha = 0.12;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.moveTo(poly[0][0], poly[0][1]);
+            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+            ctx.closePath();
+            ctx.fill();
+            ctx.restore();
+
+            // Border
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(poly[0][0], poly[0][1]);
+            for (let i = 1; i < poly.length; i++) ctx.lineTo(poly[i][0], poly[i][1]);
+            ctx.closePath();
+            ctx.stroke();
+
+            // Label
+            let cx = 0, cy = 0;
+            poly.forEach(p => { cx += p[0]; cy += p[1]; });
+            cx /= poly.length; cy /= poly.length;
+            const label = `${roi.road_name || ''} ${roi.direction || ''}`;
+            ctx.font = 'bold 12px monospace';
+            const tw = ctx.measureText(label).width;
+            ctx.fillStyle = color;
+            ctx.globalAlpha = 0.8;
+            ctx.fillRect(cx - tw/2 - 3, cy - 8, tw + 6, 16);
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = '#fff';
+            ctx.fillText(label, cx - tw/2, cy + 4);
+        });
+
+        // Draw trajectory trails with fading
+        const trails = data.trails || {};
+        const detMap = {};
+        (data.detections || []).forEach(d => {
+            if (d.track_id != null) detMap[d.track_id] = d;
+        });
+
+        for (const [tid, points] of Object.entries(trails)) {
+            if (points.length < 2) continue;
+            const det = detMap[tid];
+            const color = (det && det.color) || '#4ecca3';
+            const n = points.length;
+
+            for (let i = 1; i < n; i++) {
+                const fade = 0.15 + 0.85 * (i / (n - 1));
+                ctx.globalAlpha = fade;
+                ctx.strokeStyle = color;
+                ctx.lineWidth = Math.max(1, Math.floor(1 + 2 * (i / (n - 1))));
+                ctx.beginPath();
+                ctx.moveTo(points[i-1][0], points[i-1][1]);
+                ctx.lineTo(points[i][0], points[i][1]);
+                ctx.stroke();
+            }
+            // Head dot
+            ctx.globalAlpha = 1.0;
+            ctx.fillStyle = color;
+            ctx.beginPath();
+            ctx.arc(points[n-1][0], points[n-1][1], 4, 0, Math.PI * 2);
+            ctx.fill();
+        }
+        ctx.globalAlpha = 1.0;
+
+        // Draw bounding boxes
+        (data.detections || []).forEach(det => {
+            const color = det.color || '#4ecca3';
+            const x = det.x1, y = det.y1;
+            const w = det.x2 - det.x1, h = det.y2 - det.y1;
+
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 2;
+            ctx.strokeRect(x, y, w, h);
+
+            // Label
+            let label = det.label;
+            if (det.track_id != null) label += ` #${det.track_id}`;
+            ctx.font = '11px monospace';
+            const tw = ctx.measureText(label).width;
+            ctx.fillStyle = color;
+            ctx.fillRect(x, y - 15, tw + 6, 15);
+            ctx.fillStyle = '#000';
+            ctx.fillText(label, x + 3, y - 3);
+        });
     },
 
     clearOverlay() {
@@ -185,23 +305,100 @@ const CameraPanel = {
         this.ctx.restore();
     },
 
-    updateStats(cvResult, detectorSamples) {
+    updateStats(cvResult, stations, interval) {
         document.getElementById('cv-count').textContent = cvResult.vehicle_count;
         document.getElementById('cv-occupancy').textContent = Utils.fmt(cvResult.occupancy) + '%';
 
-        // Average detector values
-        const detVol = Utils.avg(detectorSamples.map(d => d.volume));
-        const detOcc = Utils.avg(detectorSamples.map(d => d.occupancy));
+        // CV speed from interval data
+        if (interval && interval.detectors) {
+            const speeds = interval.detectors.map(d => d.speed).filter(s => s != null);
+            const avgSpeed = speeds.length > 0
+                ? speeds.reduce((a, b) => a + b, 0) / speeds.length
+                : null;
+            document.getElementById('cv-speed').textContent = avgSpeed != null
+                ? Utils.fmt(avgSpeed, 0) + ' mph'
+                : '--';
+        } else {
+            document.getElementById('cv-speed').textContent = '--';
+        }
+
+        // Station-level detector totals (sum volume, avg occ/speed)
+        const stationVols = (stations || []).map(s => s.volume).filter(v => v != null);
+        const detVol = stationVols.length > 0 ? stationVols.reduce((a, b) => a + b, 0) : null;
+        const detOcc = Utils.avg((stations || []).map(s => s.occupancy));
+        const detSpd = Utils.avg((stations || []).map(s => s.speed));
 
         document.getElementById('det-count').textContent = detVol != null ? Utils.fmt(detVol, 0) : '--';
         document.getElementById('det-occupancy').textContent = detOcc != null ? Utils.fmt(detOcc) + '%' : '--';
+        document.getElementById('det-speed').textContent = detSpd != null ? Utils.fmt(detSpd, 0) + ' mph' : '--';
+    },
+
+    _countdownTimer: null,
+    _countdownStart: null,
+    _countdownDuration: 30,  // seconds
+
+    updateStreamInfo(interval) {
+        const el = document.getElementById('stream-info');
+        if (!interval) {
+            el.classList.add('hidden');
+            return;
+        }
+        el.classList.remove('hidden');
+        document.getElementById('stream-fps').textContent = `${interval.fps_actual} fps`;
+        document.getElementById('stream-frames').textContent = `${interval.frame_count} frames`;
+
+        // Reset countdown on each update
+        this._startCountdown();
+    },
+
+    _startCountdown() {
+        // Clear existing timer
+        if (this._countdownTimer) {
+            clearInterval(this._countdownTimer);
+        }
+
+        this._countdownStart = Date.now();
+        const duration = this._countdownDuration;
+        const bar = document.getElementById('stream-progress-bar');
+        const label = document.getElementById('stream-countdown');
+
+        // Reset bar immediately (no transition for the reset)
+        bar.style.transition = 'none';
+        bar.style.width = '0%';
+
+        // Force reflow then re-enable transition
+        bar.offsetHeight;
+        bar.style.transition = 'width 1s linear';
+
+        const tick = () => {
+            const elapsed = (Date.now() - this._countdownStart) / 1000;
+            const remaining = Math.max(0, duration - elapsed);
+            const pct = Math.min(100, (elapsed / duration) * 100);
+
+            bar.style.width = `${pct}%`;
+            label.textContent = `Next in ${Math.ceil(remaining)}s`;
+
+            if (remaining <= 0) {
+                label.textContent = 'Updating...';
+                clearInterval(this._countdownTimer);
+                this._countdownTimer = null;
+            }
+        };
+
+        tick();
+        this._countdownTimer = setInterval(tick, 1000);
     },
 
     /**
      * Update road breakdown badges showing per-road vehicle counts.
      * @param {Array} roadCounts - from CVResult.road_counts
      */
-    updateRoadBreakdown(roadCounts) {
+    /**
+     * Update road breakdown badges with CV and detector per-direction comparison.
+     * @param {Array} roadCounts - from IntervalResult.detectors or CVResult.road_counts
+     * @param {Array} stations - StationAggregate array from SSE event
+     */
+    updateRoadBreakdown(roadCounts, stations) {
         const section = document.getElementById('road-breakdown');
         const container = document.getElementById('road-badges');
 
@@ -210,26 +407,46 @@ const CameraPanel = {
             return;
         }
 
+        // Build station lookup by direction
+        const stationByDir = {};
+        (stations || []).forEach(s => { stationByDir[s.direction] = s; });
+
         section.classList.remove('hidden');
         container.innerHTML = '';
 
         roadCounts.forEach(rc => {
-            const color = this.roadColorMap[rc.road_name] || '#4ecca3';
+            const roadName = rc.road_name;
+            const dir = rc.direction;
+            const vol = rc.volume != null ? rc.volume : rc.vehicle_count;
+            const color = this.roadColorMap[roadName] || '#4ecca3';
             const badge = document.createElement('div');
             badge.className = 'road-badge';
             badge.style.borderLeftColor = color;
 
-            // Build type breakdown string
             const types = Object.entries(rc.by_type || {})
                 .map(([t, c]) => `${c} ${t}${c > 1 ? 's' : ''}`)
                 .join(', ');
 
+            const speedStr = rc.speed != null ? ` | spd: ${Utils.fmt(rc.speed, 0)} mph` : '';
+
+            // Match station by direction for side-by-side comparison
+            const station = stationByDir[dir];
+            let detLine = '';
+            if (station) {
+                const parts = [];
+                if (station.volume != null) parts.push(`vol: ${Utils.fmt(station.volume, 0)}`);
+                if (station.occupancy != null) parts.push(`occ: ${Utils.fmt(station.occupancy)}%`);
+                if (station.speed != null) parts.push(`spd: ${Utils.fmt(station.speed, 0)} mph`);
+                detLine = `<div class="road-badge-detail" style="color:#e94560">Det ${station.station_label}: ${parts.join(' | ')}</div>`;
+            }
+
             badge.innerHTML = `
                 <div class="road-badge-header">
-                    <span class="road-badge-name" style="color:${color}">${rc.road_name} ${rc.direction}</span>
-                    <span class="road-badge-count">${rc.vehicle_count}</span>
+                    <span class="road-badge-name" style="color:${color}">${roadName} ${dir}</span>
+                    <span class="road-badge-count">${vol}</span>
                 </div>
-                <div class="road-badge-detail">${types || 'no vehicles'} | occ: ${Utils.fmt(rc.occupancy)}%</div>
+                <div class="road-badge-detail">${types || 'no vehicles'} | occ: ${Utils.fmt(rc.occupancy)}%${speedStr}</div>
+                ${detLine}
             `;
             container.appendChild(badge);
         });

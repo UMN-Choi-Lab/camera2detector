@@ -32,9 +32,26 @@ class Settings(BaseSettings):
     clickhouse_port: int = 8123
     clickhouse_database: str = "sensors"
 
-    # Multi-frame tracking (30s aggregation window: 10 frames × 3s = 30s)
+    # Multi-frame tracking (legacy JPEG snapshot mode)
     tracking_frames: int = 10
     tracking_interval_s: float = 3.0
+
+    # HLS stream processing
+    hls_enabled: bool = True
+    hls_target_fps: float = 15.0
+    hls_reconnect_delay_s: float = 5.0
+    hls_reconnect_max_retries: int = 10
+    aggregation_window_s: float = 30.0
+
+    # YOLO tracking (ByteTrack)
+    yolo_tracker: str = "bytetrack.yaml"
+
+    # GPU management
+    max_concurrent_streams: int = 4
+
+    # Speed estimation: pixels-per-meter calibration (camera-dependent)
+    # Default ~7.0 is rough estimate for typical MnDOT highway cameras at 720x480
+    speed_calibration_ppm: float = 7.0
 
     # OpenAI (VLM ROI generation)
     openai_api_key: str = ""

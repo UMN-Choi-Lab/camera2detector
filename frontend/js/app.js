@@ -42,6 +42,10 @@
     document.getElementById('roi-done-btn').addEventListener('click', doneEditing);
 
     async function onCameraClick(cam) {
+        // Stop previous stream if switching cameras
+        if (currentCameraId && currentCameraId !== cam.id) {
+            CameraPanel.stopMjpegStream();
+        }
         currentCameraId = cam.id;
 
         // Fetch camera details with matched detectors
@@ -118,6 +122,9 @@
         // Reset charts
         Charts.reset();
 
+        // Start MJPEG live stream (annotations rendered server-side, perfectly synced)
+        CameraPanel.startMjpegStream(cam.id);
+
         // Fetch ClearGuide speed for comparison
         fetchClearGuideSpeed(cam.id);
 
@@ -142,26 +149,30 @@
     }
 
     function onSSEUpdate(data) {
-        // Update camera image
-        CameraPanel.loadImage(data.camera_id);
+        // Video + tracking overlay handled by HLS stream + tracking SSE
+        // This SSE handler only processes 30s interval data (stats, charts)
 
-        // Draw bounding boxes (with road colors + direction arrows)
-        setTimeout(() => {
-            CameraPanel.drawBoxes(data.cv.boxes);
-        }, 500);  // Wait for image to load
+        // Use station-level aggregates for detector comparison
+        const stations = data.stations || [];
 
-        // Update stat cards
-        CameraPanel.updateStats(data.cv, data.detectors);
+        // Update stat cards (pass interval + stations)
+        CameraPanel.updateStats(data.cv, stations, data.interval);
 
-        // Update road breakdown
-        if (data.cv.road_counts) {
-            CameraPanel.updateRoadBreakdown(data.cv.road_counts);
+        // Update stream info bar
+        CameraPanel.updateStreamInfo(data.interval);
+
+        // Update road breakdown — combine CV and detector per-direction
+        if (data.interval && data.interval.detectors && data.interval.detectors.length > 0) {
+            CameraPanel.updateRoadBreakdown(data.interval.detectors, stations);
+        } else if (data.cv.road_counts) {
+            CameraPanel.updateRoadBreakdown(data.cv.road_counts, stations);
         }
 
-        // Update charts
-        const detVol = Utils.avg(data.detectors.map(d => d.volume));
-        const detOcc = Utils.avg(data.detectors.map(d => d.occupancy));
-        const detSpeed = Utils.avg(data.detectors.map(d => d.speed));
+        // Station totals: sum volumes, average occ/speed across stations
+        const stationVols = stations.map(s => s.volume).filter(v => v != null);
+        const detVol = stationVols.length > 0 ? stationVols.reduce((a, b) => a + b, 0) : null;
+        const detOcc = Utils.avg(stations.map(s => s.occupancy));
+        const detSpeed = Utils.avg(stations.map(s => s.speed));
 
         Charts.addDataPoint(
             data.timestamp,
@@ -171,11 +182,25 @@
             detOcc,
         );
 
-        // Speed chart: MnDOT detector speed
-        Charts.addSpeedDataPoint(data.timestamp, detSpeed);
+        // Speed chart: MnDOT detector speed + CV speed from interval
+        let cvSpeed = null;
+        if (data.interval && data.interval.detectors) {
+            const speeds = data.interval.detectors.map(d => d.speed).filter(s => s != null);
+            if (speeds.length > 0) {
+                cvSpeed = speeds.reduce((a, b) => a + b, 0) / speeds.length;
+            }
+        }
+        Charts.addSpeedDataPoint(data.timestamp, detSpeed, cvSpeed);
 
         // Add per-road data to charts
-        if (data.cv.road_counts) {
+        if (data.interval && data.interval.detectors && data.interval.detectors.length > 0) {
+            const roadCounts = data.interval.detectors.map(d => ({
+                road_name: d.road_name,
+                direction: d.direction,
+                vehicle_count: d.volume,
+            }));
+            Charts.addRoadDataPoint(roadCounts);
+        } else if (data.cv.road_counts) {
             Charts.addRoadDataPoint(data.cv.road_counts);
         }
     }

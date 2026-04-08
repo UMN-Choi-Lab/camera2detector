@@ -12,6 +12,7 @@ from backend.services.metro_config import metro_config_service
 from backend.services.mndot_client import mndot_client
 from backend.services.cv_pipeline import cv_pipeline
 from backend.services.road_geometry import road_geometry_service
+from backend.services.stream_manager import stream_manager
 from backend.routers import proxy, cv, sse, history, roi, clearguide
 from backend.config import settings
 
@@ -40,6 +41,7 @@ async def lifespan(app: FastAPI):
         logger.exception("Failed to load road geometry (non-fatal)")
 
     yield
+    await stream_manager.shutdown()
     await mndot_client.close()
 
 
