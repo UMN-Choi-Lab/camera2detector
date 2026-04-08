@@ -4,13 +4,22 @@
 
 const CameraPanel = {
     imageEl: null,
+    videoEl: null,
     canvasEl: null,
     ctx: null,
     roadColorMap: {},  // route_label -> color
     currentROIs: null, // CameraROIs object
+    _hls: null,        // HLS.js instance
+    _trackingSSE: null, // EventSource for tracking data
+    _latestTrackingData: null,
+    _prevTrackingData: null,
+    _trackingTimestamp: 0,    // performance.now() when latest data arrived
+    _trackVelocities: {},     // track_id -> {vx, vy} pixels per second
+    _rafId: null,      // requestAnimationFrame ID
 
     init() {
         this.imageEl = document.getElementById('camera-image');
+        this.videoEl = document.getElementById('camera-video');
         this.canvasEl = document.getElementById('cv-overlay');
         this.ctx = this.canvasEl.getContext('2d');
     },
@@ -49,7 +58,124 @@ const CameraPanel = {
     },
 
     /**
-     * Start MJPEG live stream for the given camera.
+     * Start hybrid HLS stream: native <video> + canvas overlay from tracking SSE.
+     */
+    startHlsStream(cameraId) {
+        this.stopHlsStream();
+
+        // Show video, hide img
+        const cameraView = document.getElementById('camera-view');
+        cameraView.classList.add('hls-mode');
+        this.videoEl.style.display = 'block';
+        this.imageEl.style.display = 'none';
+
+        // Load HLS via hls.js
+        const hlsUrl = `https://video.dot.state.mn.us/public/${cameraId}.stream/playlist.m3u8`;
+
+        if (Hls.isSupported()) {
+            const hls = new Hls({
+                liveSyncDurationCount: 1,
+                liveMaxLatencyDurationCount: 3,
+                lowLatencyMode: true,
+                maxBufferLength: 4,
+                maxMaxBufferLength: 8,
+            });
+            hls.loadSource(hlsUrl);
+            hls.attachMedia(this.videoEl);
+            hls.on(Hls.Events.MANIFEST_PARSED, () => {
+                this.videoEl.play().catch(() => {});
+            });
+            hls.on(Hls.Events.ERROR, (_, data) => {
+                if (data.fatal) {
+                    console.warn('HLS fatal error, attempting recovery:', data.type);
+                    if (data.type === Hls.ErrorTypes.NETWORK_ERROR) {
+                        hls.startLoad();
+                    } else if (data.type === Hls.ErrorTypes.MEDIA_ERROR) {
+                        hls.recoverMediaError();
+                    }
+                }
+            });
+            this._hls = hls;
+        } else if (this.videoEl.canPlayType('application/vnd.apple.mpegurl')) {
+            // Native HLS (Safari)
+            this.videoEl.src = hlsUrl;
+            this.videoEl.play().catch(() => {});
+        }
+
+        // Connect tracking SSE for annotation data
+        this._trackingSSE = new EventSource(`/api/tracking/${cameraId}`);
+        this._trackingSSE.addEventListener('tracking', (e) => {
+            try {
+                const newData = JSON.parse(e.data);
+                const now = performance.now();
+                const dt = (now - this._trackingTimestamp) / 1000; // seconds since last update
+
+                // Compute per-track velocity from consecutive frames
+                if (this._latestTrackingData && dt > 0.01 && dt < 1.0) {
+                    const prevMap = {};
+                    (this._latestTrackingData.detections || []).forEach(d => {
+                        if (d.track_id != null) prevMap[d.track_id] = d;
+                    });
+                    const vels = {};
+                    (newData.detections || []).forEach(d => {
+                        if (d.track_id != null && prevMap[d.track_id]) {
+                            const prev = prevMap[d.track_id];
+                            vels[d.track_id] = {
+                                vx: (d.cx - prev.cx) / dt,
+                                vy: (d.cy - prev.cy) / dt,
+                            };
+                        }
+                    });
+                    this._trackVelocities = vels;
+                }
+
+                this._latestTrackingData = newData;
+                this._trackingTimestamp = now;
+            } catch (err) {
+                console.debug('Failed to parse tracking data:', err);
+            }
+        });
+
+        // Render loop: interpolate box positions between SSE updates
+        const renderLoop = () => {
+            if (this._latestTrackingData) {
+                const elapsed = (performance.now() - this._trackingTimestamp) / 1000;
+                // Clamp interpolation to avoid overshoot when SSE is delayed
+                const t = Math.min(elapsed, 0.2);
+                this._drawTrackingOverlayInterp(this._latestTrackingData, t);
+            }
+            this._rafId = requestAnimationFrame(renderLoop);
+        };
+        this._rafId = requestAnimationFrame(renderLoop);
+    },
+
+    /**
+     * Stop HLS stream and tracking overlay.
+     */
+    stopHlsStream() {
+        if (this._rafId) {
+            cancelAnimationFrame(this._rafId);
+            this._rafId = null;
+        }
+        if (this._trackingSSE) {
+            this._trackingSSE.close();
+            this._trackingSSE = null;
+        }
+        this._latestTrackingData = null;
+        if (this._hls) {
+            this._hls.destroy();
+            this._hls = null;
+        }
+        this.videoEl.src = '';
+        this.videoEl.style.display = 'none';
+        this.imageEl.style.display = 'block';
+        const cameraView = document.getElementById('camera-view');
+        cameraView.classList.remove('hls-mode');
+        this.clearOverlay();
+    },
+
+    /**
+     * Start MJPEG live stream for the given camera (fallback).
      * Annotations (boxes, trails, ROIs) are rendered server-side.
      */
     startMjpegStream(cameraId) {
@@ -68,12 +194,58 @@ const CameraPanel = {
     },
 
     /**
+     * Draw tracking data with velocity interpolation.
+     * Extrapolates box/trail positions by velocity * elapsed seconds since last SSE update.
+     */
+    _drawTrackingOverlayInterp(data, elapsed) {
+        const vels = this._trackVelocities;
+
+        // Build interpolated detections: shift cx/cy/x1/y1/x2/y2 by velocity * elapsed
+        const interpDetections = (data.detections || []).map(d => {
+            const vel = (d.track_id != null) ? vels[d.track_id] : null;
+            if (!vel) return d;
+            const dx = vel.vx * elapsed;
+            const dy = vel.vy * elapsed;
+            return {
+                ...d,
+                x1: d.x1 + dx, y1: d.y1 + dy,
+                x2: d.x2 + dx, y2: d.y2 + dy,
+                cx: d.cx + dx, cy: d.cy + dy,
+            };
+        });
+
+        // Build interpolated trails: shift last point of each trail
+        const interpTrails = {};
+        const trails = data.trails || {};
+        for (const [tid, points] of Object.entries(trails)) {
+            if (points.length === 0) { interpTrails[tid] = points; continue; }
+            const vel = vels[tid];
+            if (!vel) { interpTrails[tid] = points; continue; }
+            const dx = vel.vx * elapsed;
+            const dy = vel.vy * elapsed;
+            // Shift last point only (the head)
+            const shifted = [...points];
+            const last = shifted[shifted.length - 1];
+            shifted[shifted.length - 1] = [last[0] + dx, last[1] + dy];
+            interpTrails[tid] = shifted;
+        }
+
+        this._drawTrackingOverlay({
+            ...data,
+            detections: interpDetections,
+            trails: interpTrails,
+        });
+    },
+
+    /**
      * Draw tracking data (boxes + trails + ROIs) on canvas overlay.
-     * (Kept for potential future use with HLS mode)
      */
     _drawTrackingOverlay(data) {
-        const vw = this.videoEl.videoWidth || 720;
-        const vh = this.videoEl.videoHeight || 480;
+        // Use video intrinsic size, fall back to 720x480 (MnDOT standard)
+        const vw = (this.videoEl && this.videoEl.videoWidth > 0)
+            ? this.videoEl.videoWidth : 720;
+        const vh = (this.videoEl && this.videoEl.videoHeight > 0)
+            ? this.videoEl.videoHeight : 480;
         if (this.canvasEl.width !== vw) this.canvasEl.width = vw;
         if (this.canvasEl.height !== vh) this.canvasEl.height = vh;
 

@@ -92,6 +92,17 @@ body {
     background: #000;
 }
 
+#camera-video {
+    width: 100%;
+    display: none;
+    background: #000;
+}
+
+#camera-view.hls-mode {
+    /* Ensure container has height even if video hasn't loaded */
+    aspect-ratio: 720 / 480;
+}
+
 #camera-image {
     width: 100%;
     display: block;

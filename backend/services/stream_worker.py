@@ -3,6 +3,7 @@
 import asyncio
 import logging
 import math
+import queue
 import threading
 import time
 from collections import defaultdict, deque
@@ -198,18 +199,17 @@ class FrameAccumulator:
 # ---------------------------------------------------------------------------
 
 class FrameReader:
-    """Reads HLS frames in a dedicated thread, keeps only the latest.
+    """Reads HLS frames in a dedicated thread into a jitter buffer (queue).
 
     Key invariant: ONLY the reader thread calls cap.read() and cap.release().
-    The main async loop reads latest_frame through a lock. This prevents the
-    segfault caused by concurrent cap access from multiple threads.
+    HLS delivers frames in bursts (~30 per segment every ~3s). The queue
+    absorbs the burst so the worker can consume at a steady rate.
     """
 
-    def __init__(self, url: str):
+    def __init__(self, url: str, max_queue: int = 150):
         self._url = url
         self._cap: cv2.VideoCapture | None = None
-        self._latest_frame: np.ndarray | None = None
-        self._lock = threading.Lock()
+        self._queue: queue.Queue = queue.Queue(maxsize=max_queue)
         self._should_stop = False
         self._thread: threading.Thread | None = None
         self._connected = False
@@ -220,10 +220,9 @@ class FrameReader:
         self._thread.start()
 
     def _run(self):
-        """Main loop — open, continuously read, keep latest, release on exit."""
+        """Read all frames from HLS as fast as FFmpeg delivers them."""
         try:
             self._cap = cv2.VideoCapture(self._url, cv2.CAP_FFMPEG)
-            self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
             if not self._cap.isOpened():
                 self._error = f"Cannot open HLS: {self._url}"
                 return
@@ -234,26 +233,35 @@ class FrameReader:
                 if not ret:
                     self._error = "HLS read failed"
                     break
-                with self._lock:
-                    self._latest_frame = frame
+                # Block if queue is full — backpressure to FFmpeg
+                # (this naturally throttles to consumer rate)
+                try:
+                    self._queue.put(frame, timeout=5.0)
+                except queue.Full:
+                    # Consumer is too slow; drop this frame
+                    pass
         except Exception as e:
             self._error = str(e)
         finally:
             if self._cap is not None:
-                self._cap.release()  # ONLY this thread releases
+                self._cap.release()
             self._connected = False
 
-    def get_frame(self) -> np.ndarray | None:
-        """Get the most recent frame (non-blocking, thread-safe)."""
-        with self._lock:
-            return self._latest_frame
+    def get_frame(self, timeout: float = 1.0) -> np.ndarray | None:
+        """Get the next frame in order (blocks until available or timeout)."""
+        try:
+            return self._queue.get(timeout=timeout)
+        except queue.Empty:
+            return None
+
+    @property
+    def queued(self) -> int:
+        return self._queue.qsize()
 
     def request_stop(self):
-        """Signal the reader to stop. Does NOT touch cap."""
         self._should_stop = True
 
     def join(self, timeout: float = 3.0):
-        """Wait for the reader thread to exit."""
         if self._thread:
             self._thread.join(timeout=timeout)
 
@@ -283,6 +291,7 @@ class StreamWorker:
         self._mjpeg_subscribers = 0
         self.latest_frame_jpeg: bytes | None = None
         self._frame_seq = 0  # Incremented on each new frame processed
+        self._frame_cond = asyncio.Condition()  # Notifies MJPEG consumers instantly
 
         # Per-frame tracking data for canvas overlay (HLS + overlay mode)
         self.latest_tracking_data: dict | None = None
@@ -349,14 +358,15 @@ class StreamWorker:
         reader.start()
 
         # Wait for first frame (HLS needs time to download manifest + first segment)
+        first_frame = None
         for _ in range(200):  # Up to 20s
-            if reader.get_frame() is not None:
+            first_frame = await asyncio.to_thread(reader.get_frame, 0.1)
+            if first_frame is not None:
                 break
             if not reader.is_alive:
                 raise ConnectionError(reader._error or "FrameReader died during connect")
-            await asyncio.sleep(0.1)
 
-        if reader.get_frame() is None:
+        if first_frame is None:
             reader.request_stop()
             reader.join()
             raise ConnectionError("No frames received after 20s")
@@ -374,48 +384,64 @@ class StreamWorker:
             roi_dicts = [r.model_dump() for r in camera_rois.rois]
         roi_polygons = _build_roi_polygons(roi_dicts)
 
-        frame_interval = 1.0 / settings.hls_target_fps
         accumulator = FrameAccumulator(self.camera_id, roi_polygons)
 
         # Align to next wall-clock 30s boundary
         now = time.time()
         window_end = (now // settings.aggregation_window_s + 1) * settings.aggregation_window_s
 
+        # Track every Nth frame (YOLO is ~5ms but we want headroom)
+        track_every_n = max(1, round(30.0 / settings.hls_target_fps))  # e.g., 2 at 15fps target
+        frame_counter = 0
+        last_detections: list[dict] = []
+        output_interval = 1.0 / 30.0  # Target 30fps MJPEG output
+
         try:
             while not self._stop_event.is_set():
                 t0 = time.monotonic()
 
-                # Get latest frame from reader (already drained, no lag)
-                frame = reader.get_frame()
-                if frame is None or not reader.is_alive:
-                    raise ConnectionError(reader._error or "HLS stream disconnected")
+                # Pop next frame in order from the jitter buffer
+                frame = await asyncio.to_thread(reader.get_frame, 2.0)
+                if frame is None:
+                    if not reader.is_alive:
+                        raise ConnectionError(reader._error or "HLS stream disconnected")
+                    continue
 
-                # Run tracking with GPU semaphore
-                async with self._gpu_semaphore:
-                    detections = await asyncio.to_thread(self._track_frame, frame)
-
-                accumulator.add_frame(detections)
+                frame_counter += 1
                 self.frames_processed += 1
 
-                # Update trajectory trails
-                self._trail_frame_counter += 1
-                for det in detections:
-                    tid = det.get("track_id")
-                    if tid is not None:
-                        self._track_trails[tid].append((int(det["cx"]), int(det["cy"])))
-                        self._track_last_frame[tid] = self._trail_frame_counter
-                # Purge stale trails (not seen for 45 frames ≈ 3s at 15fps)
-                stale = [
-                    tid for tid, last in self._track_last_frame.items()
-                    if self._trail_frame_counter - last > 45
-                ]
-                for tid in stale:
-                    self._track_trails.pop(tid, None)
-                    self._track_last_frame.pop(tid, None)
+                # Run YOLO tracking on every Nth frame
+                if frame_counter % track_every_n == 0:
+                    async with self._gpu_semaphore:
+                        last_detections = await asyncio.to_thread(
+                            self._track_frame, frame
+                        )
 
-                # Publish per-frame tracking data + increment seq
+                    accumulator.add_frame(last_detections)
+
+                    # Update trajectory trails
+                    self._trail_frame_counter += 1
+                    for det in last_detections:
+                        tid = det.get("track_id")
+                        if tid is not None:
+                            self._track_trails[tid].append(
+                                (int(det["cx"]), int(det["cy"]))
+                            )
+                            self._track_last_frame[tid] = self._trail_frame_counter
+                    # Purge stale trails
+                    stale = [
+                        tid
+                        for tid, last in self._track_last_frame.items()
+                        if self._trail_frame_counter - last > 45
+                    ]
+                    for tid in stale:
+                        self._track_trails.pop(tid, None)
+                        self._track_last_frame.pop(tid, None)
+
+                # Publish per-frame tracking data
                 trails_snapshot = {
-                    str(tid): list(pts) for tid, pts in self._track_trails.items()
+                    str(tid): list(pts)
+                    for tid, pts in self._track_trails.items()
                 }
                 self.latest_tracking_data = {
                     "detections": [
@@ -426,24 +452,40 @@ class StreamWorker:
                             "label": d["label"],
                             "confidence": d["confidence"],
                             "track_id": d.get("track_id"),
-                            "road_name": (_find_roi_for_point(d["cx"], d["cy"], roi_polygons) or {}).get("road_name"),
-                            "color": (_find_roi_for_point(d["cx"], d["cy"], roi_polygons) or {}).get("color"),
+                            "road_name": (
+                                _find_roi_for_point(
+                                    d["cx"], d["cy"], roi_polygons
+                                )
+                                or {}
+                            ).get("road_name"),
+                            "color": (
+                                _find_roi_for_point(
+                                    d["cx"], d["cy"], roi_polygons
+                                )
+                                or {}
+                            ).get("color"),
                         }
-                        for d in detections
+                        for d in last_detections
                     ],
                     "trails": trails_snapshot,
                     "rois": roi_dicts,
                 }
-                self._frame_seq += 1
 
-                # Annotate frame for MJPEG viewers (only if someone is watching)
+                # Annotate EVERY frame for smooth MJPEG (cheap: ~3ms)
                 if self._mjpeg_subscribers > 0:
                     annotated = await asyncio.to_thread(
-                        self._annotate_frame, frame, detections,
-                        roi_dicts, roi_polygons,
+                        self._annotate_frame,
+                        frame,
+                        last_detections,
+                        roi_dicts,
+                        roi_polygons,
                         {int(k): v for k, v in trails_snapshot.items()},
                     )
                     self.latest_frame_jpeg = annotated
+
+                self._frame_seq += 1
+                async with self._frame_cond:
+                    self._frame_cond.notify_all()
 
                 # Check if 30s window is complete
                 if time.time() >= window_end:
@@ -454,7 +496,6 @@ class StreamWorker:
                     )
                     self.fps = result.fps_actual
 
-                    # Signal waiting SSE clients
                     self.result_ready.set()
                     self.result_ready.clear()
 
@@ -467,19 +508,17 @@ class StreamWorker:
                         result.total_occupancy,
                     )
 
-                    # Reload ROIs in case they were regenerated
                     fresh = vlm_roi_service.load_rois(self.camera_id)
                     if fresh and fresh.rois:
                         roi_dicts = [r.model_dump() for r in fresh.rois]
                         roi_polygons = _build_roi_polygons(roi_dicts)
 
-                    # Reset for next window
                     accumulator = FrameAccumulator(self.camera_id, roi_polygons)
                     window_end += settings.aggregation_window_s
 
-                # Frame rate control — sleep to hit target FPS
+                # Pace output at ~30fps (smooth playback)
                 elapsed = time.monotonic() - t0
-                sleep_time = frame_interval - elapsed
+                sleep_time = output_interval - elapsed
                 if sleep_time > 0:
                     await asyncio.sleep(sleep_time)
         finally:
@@ -561,12 +600,17 @@ class StreamWorker:
 
     async def wait_for_frame(self, last_seq: int, timeout: float = 5.0) -> int:
         """Wait for a new annotated frame. Returns new sequence number, or last_seq on timeout."""
-        deadline = time.monotonic() + timeout
-        while time.monotonic() < deadline:
-            if self._frame_seq > last_seq:
-                return self._frame_seq
-            await asyncio.sleep(0.05)  # 50ms poll — 20Hz check rate
-        return last_seq
+        if self._frame_seq > last_seq:
+            return self._frame_seq
+        try:
+            async with self._frame_cond:
+                await asyncio.wait_for(
+                    self._frame_cond.wait_for(lambda: self._frame_seq > last_seq),
+                    timeout=timeout,
+                )
+        except asyncio.TimeoutError:
+            pass
+        return self._frame_seq
 
     @staticmethod
     def _annotate_frame(
@@ -579,24 +623,24 @@ class StreamWorker:
         """Draw ROIs, trajectories, bounding boxes, and track IDs. Return JPEG bytes."""
         annotated = frame.copy()
 
-        # Draw ROI polygons
+        # Draw ROI polygons — single overlay copy for all ROIs
+        overlay = annotated.copy()
         for roi in roi_dicts:
             poly_pts = roi.get("polygon", [])
             if len(poly_pts) < 3:
                 continue
-            color_hex = roi.get("color", "#a855f7")
-            color_bgr = _hex_to_bgr(color_hex)
+            color_bgr = _hex_to_bgr(roi.get("color", "#a855f7"))
             pts = np.array(poly_pts, dtype=np.int32)
-
-            # Semi-transparent fill
-            overlay = annotated.copy()
             cv2.fillPoly(overlay, [pts], color_bgr)
-            cv2.addWeighted(overlay, 0.15, annotated, 0.85, 0, annotated)
+        cv2.addWeighted(overlay, 0.15, annotated, 0.85, 0, annotated)
 
-            # Border
+        for roi in roi_dicts:
+            poly_pts = roi.get("polygon", [])
+            if len(poly_pts) < 3:
+                continue
+            color_bgr = _hex_to_bgr(roi.get("color", "#a855f7"))
+            pts = np.array(poly_pts, dtype=np.int32)
             cv2.polylines(annotated, [pts], isClosed=True, color=color_bgr, thickness=2)
-
-            # Label
             cx = int(sum(p[0] for p in poly_pts) / len(poly_pts))
             cy = int(sum(p[1] for p in poly_pts) / len(poly_pts))
             label = f"{roi.get('road_name', '')} {roi.get('direction', '')}"
@@ -636,7 +680,7 @@ class StreamWorker:
             _draw_label(annotated, label, x1, y1 - 4, color_bgr)
 
         # Encode to JPEG
-        _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 80])
+        _, buf = cv2.imencode(".jpg", annotated, [cv2.IMWRITE_JPEG_QUALITY, 65])
         return buf.tobytes()
 
     async def stop(self):
@@ -667,46 +711,23 @@ def _draw_trails(
     track_colors: dict[int, tuple],
     roi_polygons: list[tuple[ShapelyPolygon, dict]],
 ):
-    """Draw fading trajectory trails for each tracked vehicle.
-
-    Uses color intensity fade (dark→bright) instead of per-segment alpha
-    blending for performance. Draws all trails onto a single overlay and
-    blends once.
-    """
-    overlay = img.copy()
-
+    """Draw trajectory trails directly on the image (no alpha copy for speed)."""
     for tid, points in track_trails.items():
         if len(points) < 2:
             continue
 
-        # Determine base color
         color = track_colors.get(tid)
         if color is None:
             lx, ly = points[-1]
             matched = _find_roi_for_point(lx, ly, roi_polygons)
-            if matched:
-                color = _hex_to_bgr(matched.get("color", "#4ecca3"))
-            else:
-                color = (163, 204, 78)
+            color = _hex_to_bgr((matched or {}).get("color", "#4ecca3"))
 
-        n = len(points)
-        for i in range(1, n):
-            # Fade: 0.2 at oldest → 1.0 at newest (darken the color for older segments)
-            fade = 0.2 + 0.8 * (i / (n - 1))
-            seg_color = (
-                int(color[0] * fade),
-                int(color[1] * fade),
-                int(color[2] * fade),
-            )
-            # Thickness: 1 at tail → 3 at head
-            thickness = max(1, int(1 + 2 * (i / (n - 1))))
-            cv2.line(overlay, points[i - 1], points[i], seg_color, thickness, cv2.LINE_AA)
+        # Draw polyline in one call (much faster than per-segment)
+        pts = np.array(points, dtype=np.int32).reshape(-1, 1, 2)
+        cv2.polylines(img, [pts], False, color, 2, cv2.LINE_AA)
 
         # Dot at trail head
-        cv2.circle(overlay, points[-1], 4, color, -1, cv2.LINE_AA)
-
-    # Single blend pass for all trails
-    cv2.addWeighted(overlay, 0.8, img, 0.2, 0, img)
+        cv2.circle(img, points[-1], 4, color, -1)
 
 
 def _draw_label(
