@@ -22,6 +22,8 @@ from backend.models.schemas import (
     IntervalResult,
     RoadCount,
 )
+from backend.services.camera_calibration import calibration_service
+from backend.services.camera_watchdog import CameraWatchdog
 
 logger = logging.getLogger(__name__)
 
@@ -330,6 +332,13 @@ class StreamWorker:
         self.frames_processed = 0
         self.error: str | None = None
 
+        # Camera movement detection
+        self._watchdog = CameraWatchdog(
+            reference_dir=settings.reference_frame_dir,
+            ssim_threshold=settings.movement_ssim_threshold,
+        )
+        self.roi_invalidated = False
+
         # Per-camera YOLO model instance (shares GPU weights, owns tracker state)
         self._model = None
 
@@ -519,6 +528,38 @@ class StreamWorker:
                 # Check if 30s window is complete
                 if time.time() >= window_end:
                     result = accumulator.finalize()
+
+                    # Camera movement detection
+                    if last_frame is not None:
+                        movement = self._watchdog.check_movement(
+                            self.camera_id, last_frame
+                        )
+                        result.camera_moved = movement["moved"]
+                        result.ssim_score = movement["ssim"]
+                        if movement["moved"]:
+                            self.roi_invalidated = True
+                            calibration_service.invalidate(self.camera_id)
+                            logger.warning(
+                                "Camera %s: movement detected (SSIM=%.3f), ROIs invalidated",
+                                self.camera_id,
+                                movement["ssim"],
+                            )
+
+                    # Feed velocity vectors to calibration flow accumulator
+                    # Use trajectory trails (tracks ALL vehicles, not just ROI-matched)
+                    flow_acc = calibration_service.get_or_create_accumulator(
+                        self.camera_id
+                    )
+                    if not flow_acc.is_ready:
+                        for tid, trail in self._track_trails.items():
+                            if len(trail) >= 5:
+                                x0, y0 = trail[0]
+                                x1, y1 = trail[-1]
+                                dx = x1 - x0
+                                dy = y1 - y0
+                                # Pass last centroid y for tilt estimation
+                                flow_acc.add_velocity(dx, dy, cy=y1)
+
                     self.latest_result = result
                     self.latest_boxes = self._detections_to_boxes(
                         accumulator.last_frame_detections, roi_polygons

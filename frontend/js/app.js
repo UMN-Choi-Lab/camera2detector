@@ -9,8 +9,6 @@
     CameraPanel.init();
     Charts.init();
 
-    ROIEditor.init();
-
     // State
     let currentCameraId = null;
     let currentDetectors = [];
@@ -34,12 +32,10 @@
     // Set up history button
     document.getElementById('history-load-btn').addEventListener('click', loadHistorical);
 
+    // Calibration button
+    document.getElementById('calibrate-btn').addEventListener('click', calibrateCamera);
+
     // ROI button handlers
-    document.getElementById('roi-generate-btn').addEventListener('click', generateROIs);
-    document.getElementById('roi-edit-btn').addEventListener('click', toggleEditMode);
-    document.getElementById('roi-save-polygon-btn').addEventListener('click', saveCurrentPolygon);
-    document.getElementById('roi-cancel-polygon-btn').addEventListener('click', cancelCurrentPolygon);
-    document.getElementById('roi-done-btn').addEventListener('click', doneEditing);
 
     async function onCameraClick(cam) {
         // Stop previous stream if switching cameras
@@ -83,6 +79,9 @@
 
         // Set ROIs on panel
         CameraPanel.setROIs(currentROIs);
+
+        // Load calibration overlay on camera view
+        loadCalibrationOverlay(cam.id);
 
         // Show ROI section
         const roiSection = document.getElementById('roi-section');
@@ -160,6 +159,23 @@
 
         // Update stream info bar
         CameraPanel.updateStreamInfo(data.interval);
+
+        // Update camera movement / SSIM display
+        if (data.interval) {
+            const movedBadge = document.getElementById('stream-moved-badge');
+            const ssimEl = document.getElementById('stream-ssim');
+            if (data.interval.camera_moved) {
+                movedBadge.classList.remove('hidden');
+            } else {
+                movedBadge.classList.add('hidden');
+            }
+            if (data.interval.ssim_score != null) {
+                ssimEl.textContent = `SSIM: ${data.interval.ssim_score.toFixed(3)}`;
+                ssimEl.classList.remove('hidden');
+            }
+            // Update overlay with live SSIM + movement
+            _updateCalOverlayLive(data.interval);
+        }
 
         // Update road breakdown — combine CV and detector per-direction
         if (data.interval && data.interval.detectors && data.interval.detectors.length > 0) {
@@ -255,43 +271,92 @@
         btn.textContent = 'Load';
     }
 
-    // --- ROI Functions ---
+    // --- Calibration Functions ---
 
-    async function generateROIs() {
+    let _currentCal = null;  // cached calibration for overlay
+
+    async function loadCalibrationOverlay(cameraId) {
+        const overlay = document.getElementById('cal-overlay');
+        const content = document.getElementById('cal-overlay-content');
+        try {
+            const resp = await fetch(`/api/camera/${cameraId}/calibration`);
+            if (resp.ok) {
+                _currentCal = await resp.json();
+                _renderCalOverlay(_currentCal, null);
+                overlay.classList.remove('hidden');
+            } else {
+                _currentCal = null;
+                content.innerHTML = '<div class="cal-title">Not Calibrated</div><div class="cal-row">Stream ~5 min, then Calibrate</div>';
+                overlay.classList.remove('hidden');
+            }
+        } catch {
+            overlay.classList.add('hidden');
+        }
+    }
+
+    function _renderCalOverlay(cal, live) {
+        const content = document.getElementById('cal-overlay-content');
+        const ssimLine = (live && live.ssim_score != null)
+            ? `<div class="cal-row"><span>SSIM:</span> <span class="cal-value">${live.ssim_score.toFixed(3)}</span></div>` : '';
+        const movedLine = (live && live.camera_moved)
+            ? `<div class="cal-row"><span class="cal-moved">CAMERA MOVED</span></div>` : '';
+
+        if (cal) {
+            content.innerHTML = `
+                <div class="cal-title">Calibration</div>
+                ${movedLine}
+                <div class="cal-row"><span>Azimuth:</span> <span class="cal-value">${cal.azimuth_offset_deg.toFixed(1)}&deg;</span></div>
+                <div class="cal-row"><span>Confidence:</span> <span class="cal-value">${(cal.confidence * 100).toFixed(0)}%</span></div>
+                <div class="cal-row"><span>Vehicles:</span> <span class="cal-value">${cal.n_vehicles}</span></div>
+                <div class="cal-row"><span>Road:</span> <span class="cal-value">${cal.primary_road}</span></div>
+                <div class="cal-row"><span>Flow axis:</span> <span class="cal-value">${cal.pixel_flow_axis_deg.toFixed(1)}&deg;</span></div>
+                <div class="cal-row"><span>Road bearing:</span> <span class="cal-value">${cal.road_bearing_deg.toFixed(1)}&deg;</span></div>
+                ${ssimLine}
+            `;
+        } else {
+            content.innerHTML = `
+                <div class="cal-title">Not Calibrated</div>
+                ${movedLine}${ssimLine}
+            `;
+        }
+    }
+
+    function _updateCalOverlayLive(interval) {
+        if (!interval) return;
+        const overlay = document.getElementById('cal-overlay');
+        overlay.classList.remove('hidden');
+        _renderCalOverlay(_currentCal, interval);
+    }
+
+    async function calibrateCamera() {
         if (!currentCameraId) return;
-
-        const btn = document.getElementById('roi-generate-btn');
+        const btn = document.getElementById('calibrate-btn');
         const status = document.getElementById('roi-status');
         btn.disabled = true;
-        btn.textContent = 'Generating...';
-        status.textContent = 'Sending image to GPT-4o...';
+        btn.textContent = 'Calibrating...';
+        status.textContent = 'Projecting road geometry...';
 
         try {
-            const resp = await fetch(`/api/camera/${currentCameraId}/rois/generate`, {
+            const resp = await fetch(`/api/camera/${currentCameraId}/calibrate`, {
                 method: 'POST',
             });
             if (!resp.ok) {
                 const err = await resp.json();
-                throw new Error(err.detail || 'Generation failed');
+                throw new Error(err.detail || 'Calibration failed');
             }
             const data = await resp.json();
             currentROIs = data;
             CameraPanel.setROIs(currentROIs);
             updateROIList();
-            status.textContent = `Generated ${data.rois.length} ROI(s)`;
-
-            // Redraw overlay with ROIs
-            CameraPanel.clearOverlay();
-            if (currentROIs && currentROIs.rois) {
-                CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-            }
+            status.textContent = `Projected ${data.rois.length} road ROI(s)`;
+            // Reload overlay with new calibration
+            await loadCalibrationOverlay(currentCameraId);
         } catch (err) {
-            console.error('ROI generation failed:', err);
+            console.error('Calibration failed:', err);
             status.textContent = `Error: ${err.message}`;
         }
-
         btn.disabled = false;
-        btn.textContent = 'Auto-Generate';
+        btn.textContent = 'Calibrate';
     }
 
     function updateROIList() {
@@ -299,7 +364,7 @@
         container.innerHTML = '';
 
         if (!currentROIs || !currentROIs.rois || currentROIs.rois.length === 0) {
-            container.innerHTML = '<span style="font-size:0.7rem;color:#666">No ROIs defined</span>';
+            container.innerHTML = '<span style="font-size:0.7rem;color:#666">No ROIs — click Calibrate after streaming</span>';
             return;
         }
 
@@ -311,160 +376,8 @@
                     <span class="roi-color-swatch" style="background:${roi.color || '#a855f7'}"></span>
                     ${roi.road_name} ${roi.direction}
                 </span>
-                <button class="roi-delete-btn" data-roi-id="${roi.roi_id}">x</button>
             `;
             container.appendChild(item);
         });
-
-        // Delete handlers
-        container.querySelectorAll('.roi-delete-btn').forEach(btn => {
-            btn.addEventListener('click', async (e) => {
-                const roiId = e.target.dataset.roiId;
-                try {
-                    await fetch(`/api/camera/${currentCameraId}/rois/${roiId}`, { method: 'DELETE' });
-                    // Reload ROIs
-                    const resp = await fetch(`/api/camera/${currentCameraId}/rois`);
-                    currentROIs = await resp.json();
-                    if (!currentROIs.rois || currentROIs.rois.length === 0) currentROIs = null;
-                    CameraPanel.setROIs(currentROIs);
-                    updateROIList();
-                    // Redraw
-                    CameraPanel.clearOverlay();
-                    if (currentROIs && currentROIs.rois) {
-                        CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-                    }
-                } catch (err) {
-                    console.error('Failed to delete ROI:', err);
-                }
-            });
-        });
-    }
-
-    function toggleEditMode() {
-        const editor = document.getElementById('roi-editor');
-        const btn = document.getElementById('roi-edit-btn');
-
-        if (editor.classList.contains('hidden')) {
-            editor.classList.remove('hidden');
-            btn.textContent = 'Cancel Edit';
-            ROIEditor.startEditing(onPolygonClosed);
-        } else {
-            doneEditing();
-        }
-    }
-
-    function onPolygonClosed(polygon) {
-        // Polygon closed — enable save button
-        document.getElementById('roi-save-polygon-btn').disabled = false;
-        // Store temporarily
-        ROIEditor._closedPolygon = polygon;
-
-        // Redraw with preview
-        CameraPanel.clearOverlay();
-        if (currentROIs && currentROIs.rois) {
-            CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-        }
-        // Draw closed polygon preview
-        const ctx = CameraPanel.ctx;
-        ctx.save();
-        ctx.strokeStyle = '#fbbf24';
-        ctx.lineWidth = 2;
-        ctx.fillStyle = 'rgba(251, 191, 36, 0.2)';
-        ctx.beginPath();
-        ctx.moveTo(polygon[0][0], polygon[0][1]);
-        for (let i = 1; i < polygon.length; i++) {
-            ctx.lineTo(polygon[i][0], polygon[i][1]);
-        }
-        ctx.closePath();
-        ctx.fill();
-        ctx.stroke();
-        ctx.restore();
-    }
-
-    async function saveCurrentPolygon() {
-        const polygon = ROIEditor._closedPolygon;
-        if (!polygon || !currentCameraId) return;
-
-        const roadName = document.getElementById('roi-road-name').value.trim();
-        const direction = document.getElementById('roi-direction').value;
-
-        if (!roadName) {
-            document.getElementById('roi-status').textContent = 'Enter a road name';
-            return;
-        }
-
-        // Build new ROI
-        const newROI = {
-            roi_id: Math.random().toString(36).substr(2, 8),
-            road_name: roadName,
-            direction: direction,
-            polygon: polygon,
-            color: ['#a855f7', '#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#ec4899'][
-                (currentROIs?.rois?.length || 0) % 6
-            ],
-        };
-
-        // Build full payload
-        const imgW = CameraPanel.canvasEl.width;
-        const imgH = CameraPanel.canvasEl.height;
-        const payload = {
-            camera_id: currentCameraId,
-            image_width: currentROIs?.image_width || imgW,
-            image_height: currentROIs?.image_height || imgH,
-            rois: [...(currentROIs?.rois || []), newROI],
-            generated_at: new Date().toISOString(),
-            source: 'manual',
-        };
-
-        try {
-            const resp = await fetch(`/api/camera/${currentCameraId}/rois`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(payload),
-            });
-            currentROIs = await resp.json();
-            CameraPanel.setROIs(currentROIs);
-            updateROIList();
-            document.getElementById('roi-status').textContent = `Saved: ${roadName} ${direction}`;
-        } catch (err) {
-            console.error('Failed to save ROI:', err);
-            document.getElementById('roi-status').textContent = 'Save failed';
-        }
-
-        // Reset editor state for next polygon
-        ROIEditor._closedPolygon = null;
-        document.getElementById('roi-save-polygon-btn').disabled = true;
-        document.getElementById('roi-road-name').value = '';
-        document.getElementById('roi-direction').value = '';
-
-        // Redraw
-        CameraPanel.clearOverlay();
-        if (currentROIs && currentROIs.rois) {
-            CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-        }
-    }
-
-    function cancelCurrentPolygon() {
-        ROIEditor.cancelCurrentPolygon();
-        ROIEditor._closedPolygon = null;
-        document.getElementById('roi-save-polygon-btn').disabled = true;
-
-        // Redraw without preview
-        CameraPanel.clearOverlay();
-        if (currentROIs && currentROIs.rois) {
-            CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-        }
-    }
-
-    function doneEditing() {
-        ROIEditor.stopEditing();
-        document.getElementById('roi-editor').classList.add('hidden');
-        document.getElementById('roi-edit-btn').textContent = 'Edit ROIs';
-
-        // Redraw clean
-        CameraPanel.clearOverlay();
-        if (currentROIs && currentROIs.rois) {
-            CameraPanel.drawROIs(currentROIs.rois, currentROIs.image_width, currentROIs.image_height);
-        }
     }
 })();

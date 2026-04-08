@@ -104,6 +104,7 @@ class RoadGeometryService:
                 "direction": traffic_dir,
                 "cardinal": cardinal,
                 "bearing_deg": round(road_bearing, 1),
+                "bearing_to_road_deg": round(bearing, 1),
                 "distance_m": round(float(row["_distance_m"]), 1),
                 "geometry_coords": coords,
             })
@@ -137,6 +138,37 @@ class RoadGeometryService:
     def get_camera_roads(self, camera_id: str) -> list[dict]:
         """Get cached nearby roads for a camera."""
         return self._camera_roads_cache.get(camera_id, [])
+
+    @staticmethod
+    def latlon_to_utm(lat: float, lon: float) -> tuple[float, float]:
+        """Convert WGS84 lat/lon to UTM Zone 15N (EPSG:26915) easting/northing."""
+        pt = gpd.GeoSeries([Point(lon, lat)], crs="EPSG:4326").to_crs(epsg=26915).iloc[0]
+        return pt.x, pt.y
+
+    def get_road_coords_utm(self, camera_id: str) -> list[dict]:
+        """Get nearby roads with geometry in UTM coordinates for projection math.
+
+        Returns list of dicts with same fields as get_camera_roads() plus
+        'geometry_utm': [[easting, northing], ...] in EPSG:26915 meters.
+        """
+        roads = self.get_camera_roads(camera_id)
+        if not roads:
+            return []
+
+        result = []
+        for road in roads:
+            wgs_coords = road.get("geometry_coords", [])
+            if not wgs_coords:
+                continue
+
+            # Convert each coordinate from WGS84 [lon, lat] to UTM [easting, northing]
+            pts = gpd.GeoSeries(
+                [Point(c[0], c[1]) for c in wgs_coords], crs="EPSG:4326"
+            ).to_crs(epsg=26915)
+            utm_coords = [[p.x, p.y] for p in pts]
+
+            result.append({**road, "geometry_utm": utm_coords})
+        return result
 
     @staticmethod
     def _compute_bearing(lat1: float, lon1: float, lat2: float, lon2: float) -> float:

@@ -58,6 +58,17 @@ class Settings(BaseSettings):
     openai_model: str = "gpt-5.3-chat-latest"
     roi_data_dir: str = "data/rois"
 
+    # Camera movement detection
+    movement_ssim_threshold: float = 0.60
+    reference_frame_dir: str = "data/reference_frames"
+
+    # Camera calibration defaults (Phase 1B: geometric projection)
+    default_camera_height_m: float = 9.1  # ~30 ft typical MnDOT pole mount
+    default_camera_fov_deg: float = 60.0  # Horizontal FOV
+    default_camera_tilt_deg: float = 25.0  # Downward tilt from horizontal
+    calibration_min_vehicles: int = 50
+    calibration_data_dir: str = "data/calibrations"
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

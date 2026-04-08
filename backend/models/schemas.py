@@ -87,6 +87,8 @@ class IntervalResult(BaseModel):
     detectors: list[DetectorEquivalent]
     total_volume: int
     total_occupancy: float
+    camera_moved: bool = False
+    ssim_score: float | None = None
 
 
 class SSEEvent(BaseModel):
@@ -127,4 +129,14 @@ class CameraROIs(BaseModel):
     image_height: int
     rois: list[ROIPolygon]
     generated_at: str = ""
-    source: str = "manual"  # "vlm" or "manual"
+    source: str = "manual"  # "manual", "vlm", "projected", "optimized"
+
+
+class CalibrationResult(BaseModel):
+    """Camera orientation estimated from traffic flow analysis."""
+    camera_id: str
+    azimuth_offset_deg: float  # Rotation from image-up to geographic north
+    confidence: float  # 0-1, based on bimodal fit quality
+    n_vehicles: int  # Number of tracked vehicles used
+    primary_road: str  # Road label used for calibration
+    timestamp: str

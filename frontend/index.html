@@ -10,7 +10,7 @@
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.css" />
     <link rel="stylesheet" href="https://unpkg.com/leaflet.markercluster@1.5.3/dist/MarkerCluster.Default.css" />
 
-    <link rel="stylesheet" href="/css/style.css" />
+    <link rel="stylesheet" href="/css/style.css?v=9" />
 </head>
 <body>
     <div id="app">
@@ -39,6 +39,9 @@
                     <video id="camera-video" muted autoplay playsinline></video>
                     <img id="camera-image" alt="Camera feed" />
                     <canvas id="cv-overlay"></canvas>
+                    <div id="cal-overlay" class="hidden">
+                        <div id="cal-overlay-content"></div>
+                    </div>
                 </div>
 
                 <!-- Stat cards -->
@@ -72,8 +75,10 @@
                 <!-- Stream info bar -->
                 <div id="stream-info" class="hidden">
                     <span id="stream-status-badge" class="stream-badge">LIVE</span>
+                    <span id="stream-moved-badge" class="stream-badge moved-badge hidden">MOVED</span>
                     <span id="stream-fps">-- fps</span>
                     <span id="stream-frames">-- frames</span>
+                    <span id="stream-ssim" class="hidden">SSIM: --</span>
                     <span id="stream-countdown">Next in --s</span>
                     <div id="stream-progress-wrap">
                         <div id="stream-progress-bar"></div>
@@ -85,30 +90,11 @@
                     <div id="roi-header">
                         <h4>Road ROIs</h4>
                         <div id="roi-buttons">
-                            <button id="roi-generate-btn">Auto-Generate</button>
-                            <button id="roi-edit-btn">Edit ROIs</button>
+                            <button id="calibrate-btn">Calibrate</button>
                         </div>
                     </div>
                     <div id="roi-status"></div>
                     <div id="roi-list"></div>
-
-                    <!-- ROI editor panel (hidden by default) -->
-                    <div id="roi-editor" class="hidden">
-                        <p class="roi-editor-hint">Click on the image to place vertices. Click near the first vertex to close the polygon.</p>
-                        <div class="roi-editor-form">
-                            <input type="text" id="roi-road-name" placeholder="Road name (e.g., I-94)" />
-                            <select id="roi-direction">
-                                <option value="">Direction</option>
-                                <option value="NB">NB</option>
-                                <option value="SB">SB</option>
-                                <option value="EB">EB</option>
-                                <option value="WB">WB</option>
-                            </select>
-                            <button id="roi-save-polygon-btn" disabled>Save Polygon</button>
-                            <button id="roi-cancel-polygon-btn">Cancel</button>
-                        </div>
-                        <button id="roi-done-btn">Done Editing</button>
-                    </div>
                 </div>
 
                 <!-- Road breakdown -->
@@ -173,10 +159,10 @@
     <script src="https://cdn.jsdelivr.net/npm/hls.js@1"></script>
     <script src="/js/utils.js"></script>
     <script src="/js/map.js"></script>
-    <script src="/js/camera_panel.js?v=6"></script>
-    <script src="/js/charts.js?v=6"></script>
+    <script src="/js/camera_panel.js?v=9"></script>
+    <script src="/js/charts.js?v=9"></script>
     <script src="/js/sse_client.js"></script>
     <script src="/js/roi_editor.js"></script>
-    <script src="/js/app.js?v=6"></script>
+    <script src="/js/app.js?v=9"></script>
 </body>
 </html>
