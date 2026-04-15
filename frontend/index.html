@@ -84,6 +84,11 @@
                         <div id="stream-progress-bar"></div>
                     </div>
                 </div>
+                <div id="sync-control" class="hidden" style="padding:4px 8px;font-size:0.75rem;display:flex;align-items:center;gap:6px;">
+                    <label for="sync-slider" style="color:#aaa;">Sync delay:</label>
+                    <input type="range" id="sync-slider" min="0" max="30" step="0.5" value="15" style="width:120px;">
+                    <span id="sync-value" style="color:#4ecca3;min-width:30px;">15s</span>
+                </div>
 
                 <!-- ROI section -->
                 <div id="roi-section" class="hidden">
@@ -91,6 +96,7 @@
                         <h4>Road ROIs</h4>
                         <div id="roi-buttons">
                             <button id="calibrate-btn">Calibrate</button>
+                            <button id="delete-rois-btn" class="roi-delete-btn">Delete ROIs</button>
                         </div>
                     </div>
                     <div id="roi-status"></div>

@@ -16,8 +16,8 @@ class Settings(BaseSettings):
     mayfly_cache_seconds: int = 60
 
     # YOLO
-    yolo_model: str = "yolov8n.pt"
-    yolo_confidence: float = 0.3
+    yolo_model: str = "yolov8s.pt"
+    yolo_confidence: float = 0.15
     vehicle_classes: list[int] = [2, 3, 5, 7]  # car, motorcycle, bus, truck
 
     # Spatial matching
@@ -75,6 +75,9 @@ class Settings(BaseSettings):
     cluster_min_group_size: int = 20      # min trajectories per road-direction group
     cluster_max_angle_deg: float = 45.0   # max circular distance for direction assignment
     cluster_simplify_px: float = 10.0     # Shapely simplify tolerance (pixels)
+
+    # Default cameras to stream on startup
+    default_stream_cameras: list[str] = ["C844"]
 
     # Server
     host: str = "0.0.0.0"

@@ -40,6 +40,12 @@ async def lifespan(app: FastAPI):
     except Exception:
         logger.exception("Failed to load road geometry (non-fatal)")
 
+    # Auto-start default camera streams
+    default_cameras = settings.default_stream_cameras
+    for cam_id in default_cameras:
+        await stream_manager.subscribe(cam_id)
+        logger.info("Auto-started stream for %s", cam_id)
+
     yield
     await stream_manager.shutdown()
     await mndot_client.close()

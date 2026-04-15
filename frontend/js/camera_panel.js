@@ -16,6 +16,8 @@ const CameraPanel = {
     _trackingTimestamp: 0,    // performance.now() when latest data arrived
     _trackVelocities: {},     // track_id -> {vx, vy} pixels per second
     _rafId: null,      // requestAnimationFrame ID
+    _trackingBuffer: [],      // ring buffer of {data, clientTime} for HLS sync
+    _trackingBufferMax: 300,  // ~10s at 30fps
 
     init() {
         this.imageEl = document.getElementById('camera-image');
@@ -102,48 +104,88 @@ const CameraPanel = {
             this.videoEl.play().catch(() => {});
         }
 
-        // Connect tracking SSE for annotation data
+        // Show sync control
+        document.getElementById('sync-control').classList.remove('hidden');
+        const syncSlider = document.getElementById('sync-slider');
+        const syncLabel = document.getElementById('sync-value');
+        syncSlider.addEventListener('input', () => {
+            syncLabel.textContent = syncSlider.value + 's';
+        });
+
+        // Connect tracking SSE — buffer events with server timestamps
+        this._trackingBuffer = [];
         this._trackingSSE = new EventSource(`/api/tracking/${cameraId}`);
         this._trackingSSE.addEventListener('tracking', (e) => {
             try {
                 const newData = JSON.parse(e.data);
-                const now = performance.now();
-                const dt = (now - this._trackingTimestamp) / 1000; // seconds since last update
+                const serverTime = newData.server_time || (Date.now() / 1000);
 
-                // Compute per-track velocity from consecutive frames
-                if (this._latestTrackingData && dt > 0.01 && dt < 1.0) {
-                    const prevMap = {};
-                    (this._latestTrackingData.detections || []).forEach(d => {
-                        if (d.track_id != null) prevMap[d.track_id] = d;
-                    });
-                    const vels = {};
-                    (newData.detections || []).forEach(d => {
-                        if (d.track_id != null && prevMap[d.track_id]) {
-                            const prev = prevMap[d.track_id];
-                            vels[d.track_id] = {
-                                vx: (d.cx - prev.cx) / dt,
-                                vy: (d.cy - prev.cy) / dt,
-                            };
-                        }
-                    });
-                    this._trackVelocities = vels;
+                this._trackingBuffer.push({
+                    data: newData,
+                    serverTime: serverTime,
+                });
+                if (this._trackingBuffer.length > this._trackingBufferMax) {
+                    this._trackingBuffer.shift();
                 }
-
-                this._latestTrackingData = newData;
-                this._trackingTimestamp = now;
             } catch (err) {
                 console.debug('Failed to parse tracking data:', err);
             }
         });
 
-        // Render loop: interpolate box positions between SSE updates
+        // Render loop: use sync slider to pick correct tracking frame
         const renderLoop = () => {
-            if (this._latestTrackingData) {
-                const elapsed = (performance.now() - this._trackingTimestamp) / 1000;
-                // Clamp interpolation to avoid overshoot when SSE is delayed
-                const t = Math.min(elapsed, 0.2);
-                this._drawTrackingOverlayInterp(this._latestTrackingData, t);
+            const buf = this._trackingBuffer;
+            if (buf.length < 2) {
+                this._rafId = requestAnimationFrame(renderLoop);
+                return;
             }
+
+            // Sync delay from slider (seconds)
+            const syncDelay = parseFloat(syncSlider.value) || 15;
+
+            // The video shows content from `syncDelay` seconds ago
+            const latestServerTime = buf[buf.length - 1].serverTime;
+            const videoServerTime = latestServerTime - syncDelay;
+
+            // Find tracking frame matching video time
+            let bestIdx = 0;
+            for (let i = buf.length - 1; i >= 0; i--) {
+                if (buf[i].serverTime <= videoServerTime) {
+                    bestIdx = i;
+                    break;
+                }
+            }
+
+            const synced = buf[bestIdx];
+
+            // Compute velocities
+            if (bestIdx > 0) {
+                const prev = buf[bestIdx - 1];
+                const dt = synced.serverTime - prev.serverTime;
+                if (dt > 0.01 && dt < 1.0) {
+                    const prevMap = {};
+                    (prev.data.detections || []).forEach(d => {
+                        if (d.track_id != null) prevMap[d.track_id] = d;
+                    });
+                    const vels = {};
+                    (synced.data.detections || []).forEach(d => {
+                        if (d.track_id != null && prevMap[d.track_id]) {
+                            const p = prevMap[d.track_id];
+                            vels[d.track_id] = {
+                                vx: (d.cx - p.cx) / dt,
+                                vy: (d.cy - p.cy) / dt,
+                            };
+                        }
+                    });
+                    this._trackVelocities = vels;
+                }
+            }
+
+            // Interpolate
+            const elapsed = videoServerTime - synced.serverTime;
+            const t = Math.max(0, Math.min(elapsed, 0.3));
+            this._drawTrackingOverlayInterp(synced.data, t);
+
             this._rafId = requestAnimationFrame(renderLoop);
         };
         this._rafId = requestAnimationFrame(renderLoop);
@@ -162,6 +204,8 @@ const CameraPanel = {
             this._trackingSSE = null;
         }
         this._latestTrackingData = null;
+        this._trackingBuffer = [];
+        document.getElementById('sync-control').classList.add('hidden');
         if (this._hls) {
             this._hls.destroy();
             this._hls = null;
@@ -180,7 +224,13 @@ const CameraPanel = {
      */
     startMjpegStream(cameraId) {
         this.stopMjpegStream();
+        this.stopHlsStream();
         this._mjpegCameraId = cameraId;
+        // Ensure img visible, video hidden
+        this.videoEl.style.display = 'none';
+        this.imageEl.style.display = 'block';
+        const cameraView = document.getElementById('camera-view');
+        cameraView.classList.remove('hls-mode');
         this.imageEl.src = `/api/stream/${cameraId}`;
     },
 
@@ -191,6 +241,99 @@ const CameraPanel = {
         this._mjpegCameraId = null;
         this.imageEl.src = '';
         this.clearOverlay();
+    },
+
+    /**
+     * Buffered MJPEG: load annotated frames into a hidden <img>,
+     * buffer snapshots client-side, play back on canvas at steady FPS.
+     * Perfect sync (annotations baked in) + smooth (buffer absorbs jitter).
+     */
+    startBufferedMjpeg(cameraId) {
+        this.stopBufferedMjpeg();
+        this.stopHlsStream();
+        this.stopMjpegStream();
+
+        this.videoEl.style.display = 'none';
+        this.imageEl.style.display = 'none';
+        const cameraView = document.getElementById('camera-view');
+        cameraView.classList.remove('hls-mode');
+        this.canvasEl.width = 720;
+        this.canvasEl.height = 480;
+
+        this._mjpegBuffer = [];       // ring buffer of ImageBitmap
+        this._mjpegPlaying = false;
+        this._mjpegStopped = false;
+
+        // Use a hidden img to receive MJPEG, snapshot each frame into buffer
+        const feedImg = document.createElement('img');
+        feedImg.style.display = 'none';
+        feedImg.crossOrigin = 'anonymous';
+        document.body.appendChild(feedImg);
+        this._mjpegFeedImg = feedImg;
+
+        // Poll the hidden img for new frames
+        let lastSrc = '';
+        this._mjpegPollInterval = setInterval(() => {
+            if (this._mjpegStopped) return;
+            if (feedImg.complete && feedImg.naturalWidth > 0) {
+                // Snapshot current frame to canvas-compatible bitmap
+                createImageBitmap(feedImg).then(bmp => {
+                    this._mjpegBuffer.push(bmp);
+                    // Cap buffer size
+                    while (this._mjpegBuffer.length > 60) {
+                        this._mjpegBuffer.shift().close();
+                    }
+                }).catch(() => {});
+            }
+        }, 50);  // Poll at 20hz — capture whatever the MJPEG delivers
+
+        // Start MJPEG feed
+        feedImg.src = `/api/stream/${cameraId}`;
+
+        // Playback: drain buffer at steady 10fps onto visible canvas
+        this._mjpegPlayInterval = setInterval(() => {
+            const ctx = this.ctx;
+            if (!this._mjpegPlaying) {
+                // Buffering phase
+                if (this._mjpegBuffer.length >= 15) {
+                    this._mjpegPlaying = true;
+                } else {
+                    ctx.fillStyle = '#1a1a2e';
+                    ctx.fillRect(0, 0, 720, 480);
+                    ctx.fillStyle = '#4ecca3';
+                    ctx.font = '16px monospace';
+                    ctx.fillText(`Buffering... ${this._mjpegBuffer.length}/15`, 280, 240);
+                }
+                return;
+            }
+            if (this._mjpegBuffer.length > 0) {
+                const frame = this._mjpegBuffer.shift();
+                ctx.drawImage(frame, 0, 0, 720, 480);
+                frame.close();
+            }
+        }, 100);  // 10fps playback
+    },
+
+    stopBufferedMjpeg() {
+        this._mjpegStopped = true;
+        if (this._mjpegPollInterval) {
+            clearInterval(this._mjpegPollInterval);
+            this._mjpegPollInterval = null;
+        }
+        if (this._mjpegPlayInterval) {
+            clearInterval(this._mjpegPlayInterval);
+            this._mjpegPlayInterval = null;
+        }
+        if (this._mjpegFeedImg) {
+            this._mjpegFeedImg.src = '';
+            this._mjpegFeedImg.remove();
+            this._mjpegFeedImg = null;
+        }
+        if (this._mjpegBuffer) {
+            this._mjpegBuffer.forEach(b => { try { b.close(); } catch(e) {} });
+            this._mjpegBuffer = [];
+        }
+        this._mjpegPlaying = false;
     },
 
     /**

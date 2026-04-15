@@ -483,6 +483,7 @@ class StreamWorker:
                     for tid, pts in self._track_trails.items()
                 }
                 self.latest_tracking_data = {
+                    "server_time": time.time(),
                     "detections": [
                         {
                             "x1": d["x1"], "y1": d["y1"],

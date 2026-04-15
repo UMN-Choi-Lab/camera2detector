@@ -35,6 +35,9 @@
     // Calibration button
     document.getElementById('calibrate-btn').addEventListener('click', calibrateCamera);
 
+    // Delete ROIs button
+    document.getElementById('delete-rois-btn').addEventListener('click', deleteRois);
+
     // ROI button handlers
 
     async function onCameraClick(cam) {
@@ -121,7 +124,7 @@
         // Reset charts
         Charts.reset();
 
-        // Start MJPEG live stream (annotations rendered server-side, perfectly synced)
+        // MJPEG stream with server-side annotations (perfect sync)
         CameraPanel.startMjpegStream(cam.id);
 
         // Fetch ClearGuide speed for comparison
@@ -357,6 +360,36 @@
         }
         btn.disabled = false;
         btn.textContent = 'Calibrate';
+    }
+
+    async function deleteRois() {
+        if (!currentCameraId) return;
+        const btn = document.getElementById('delete-rois-btn');
+        const status = document.getElementById('roi-status');
+        btn.disabled = true;
+
+        try {
+            // Delete all ROIs by saving an empty list
+            const resp = await fetch(`/api/camera/${currentCameraId}/rois`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    camera_id: currentCameraId,
+                    image_width: 720,
+                    image_height: 480,
+                    rois: [],
+                    source: 'manual',
+                }),
+            });
+            if (!resp.ok) throw new Error('Failed to delete ROIs');
+            currentROIs = null;
+            CameraPanel.setROIs(null);
+            updateROIList();
+            status.textContent = 'ROIs deleted';
+        } catch (err) {
+            status.textContent = `Error: ${err.message}`;
+        }
+        btn.disabled = false;
     }
 
     function updateROIList() {
