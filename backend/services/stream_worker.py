@@ -24,6 +24,7 @@ from backend.models.schemas import (
 )
 from backend.services.camera_calibration import calibration_service
 from backend.services.camera_watchdog import CameraWatchdog
+from backend.services.trajectory_cluster import trajectory_cluster_service
 
 logger = logging.getLogger(__name__)
 
@@ -539,6 +540,7 @@ class StreamWorker:
                         if movement["moved"]:
                             self.roi_invalidated = True
                             calibration_service.invalidate(self.camera_id)
+                            trajectory_cluster_service.invalidate(self.camera_id)
                             logger.warning(
                                 "Camera %s: movement detected (SSIM=%.3f), ROIs invalidated",
                                 self.camera_id,
@@ -559,6 +561,29 @@ class StreamWorker:
                                 dy = y1 - y0
                                 # Pass last centroid y for tilt estimation
                                 flow_acc.add_velocity(dx, dy, cy=y1)
+
+                    # Feed trajectory cluster accumulator
+                    traj_acc = trajectory_cluster_service.get_or_create_accumulator(
+                        self.camera_id
+                    )
+                    traj_acc.add_trails(self._track_trails)
+
+                    # Auto-generate ROIs from trajectory clustering if none exist
+                    if (
+                        not roi_dicts
+                        and not traj_acc._generation_attempted
+                        and traj_acc.is_ready
+                    ):
+                        generated = trajectory_cluster_service.try_generate(
+                            self.camera_id
+                        )
+                        if generated:
+                            roi_dicts = [r.model_dump() for r in generated.rois]
+                            roi_polygons = _build_roi_polygons(roi_dicts)
+                            logger.info(
+                                "Camera %s: auto-generated %d trajectory ROIs",
+                                self.camera_id, len(generated.rois),
+                            )
 
                     self.latest_result = result
                     self.latest_boxes = self._detections_to_boxes(
@@ -631,6 +656,20 @@ class StreamWorker:
                         "track_id": track_id,
                     }
                 )
+
+        # Deduplicate by track_id — ByteTrack can assign the same ID to
+        # overlapping detections that NMS didn't merge. Keep highest confidence.
+        if detections:
+            best: dict[int | None, dict] = {}
+            no_id = []
+            for det in detections:
+                tid = det["track_id"]
+                if tid is None:
+                    no_id.append(det)
+                elif tid not in best or det["confidence"] > best[tid]["confidence"]:
+                    best[tid] = det
+            detections = list(best.values()) + no_id
+
         return detections
 
     @staticmethod

@@ -175,71 +175,19 @@ const CameraPanel = {
     },
 
     /**
-     * Start MJPEG live stream with canvas overlay for ROIs/tracking.
+     * Start MJPEG live stream (annotations are baked into the JPEG server-side).
+     * No canvas overlay needed — avoids duplicate bounding boxes.
      */
     startMjpegStream(cameraId) {
         this.stopMjpegStream();
         this._mjpegCameraId = cameraId;
         this.imageEl.src = `/api/stream/${cameraId}`;
-
-        // Connect tracking SSE for canvas overlay (ROIs, boxes, trails)
-        this._trackingSSE = new EventSource(`/api/tracking/${cameraId}`);
-        this._trackingSSE.addEventListener('tracking', (e) => {
-            try {
-                const newData = JSON.parse(e.data);
-                const now = performance.now();
-                const dt = (now - this._trackingTimestamp) / 1000;
-
-                if (this._latestTrackingData && dt > 0.01 && dt < 1.0) {
-                    const prevMap = {};
-                    (this._latestTrackingData.detections || []).forEach(d => {
-                        if (d.track_id != null) prevMap[d.track_id] = d;
-                    });
-                    const vels = {};
-                    (newData.detections || []).forEach(d => {
-                        if (d.track_id != null && prevMap[d.track_id]) {
-                            const prev = prevMap[d.track_id];
-                            vels[d.track_id] = {
-                                vx: (d.cx - prev.cx) / dt,
-                                vy: (d.cy - prev.cy) / dt,
-                            };
-                        }
-                    });
-                    this._trackVelocities = vels;
-                }
-
-                this._latestTrackingData = newData;
-                this._trackingTimestamp = now;
-            } catch (err) {
-                console.debug('Failed to parse tracking data:', err);
-            }
-        });
-
-        // Start render loop for canvas overlay
-        const renderLoop = () => {
-            if (this._latestTrackingData) {
-                const elapsed = (performance.now() - this._trackingTimestamp) / 1000;
-                const t = Math.min(elapsed, 0.2);
-                this._drawTrackingOverlayInterp(this._latestTrackingData, t);
-            }
-            this._rafId = requestAnimationFrame(renderLoop);
-        };
-        this._rafId = requestAnimationFrame(renderLoop);
     },
 
     /**
      * Stop MJPEG stream.
      */
     stopMjpegStream() {
-        if (this._rafId) {
-            cancelAnimationFrame(this._rafId);
-            this._rafId = null;
-        }
-        if (this._trackingSSE) {
-            this._trackingSSE.close();
-            this._trackingSSE = null;
-        }
-        this._latestTrackingData = null;
         this._mjpegCameraId = null;
         this.imageEl.src = '';
         this.clearOverlay();

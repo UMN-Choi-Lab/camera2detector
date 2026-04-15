@@ -69,6 +69,13 @@ class Settings(BaseSettings):
     calibration_min_vehicles: int = 50
     calibration_data_dir: str = "data/calibrations"
 
+    # Trajectory-based ROI clustering
+    cluster_min_trajectories: int = 200   # vehicles needed for auto-generation
+    cluster_min_force: int = 50           # minimum for forced (API) generation
+    cluster_min_group_size: int = 20      # min trajectories per road-direction group
+    cluster_max_angle_deg: float = 45.0   # max circular distance for direction assignment
+    cluster_simplify_px: float = 10.0     # Shapely simplify tolerance (pixels)
+
     # Server
     host: str = "0.0.0.0"
     port: int = 8000

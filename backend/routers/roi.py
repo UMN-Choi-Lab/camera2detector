@@ -4,10 +4,12 @@ import logging
 
 from fastapi import APIRouter, HTTPException
 
+from backend.config import settings
 from backend.models.schemas import CameraROIs, ROIPolygon
 from backend.services.camera_calibration import calibration_service
 from backend.services.road_geometry import road_geometry_service
 from backend.services.road_projection import generate_projected_rois, save_projected_rois
+from backend.services.trajectory_cluster import trajectory_cluster_service
 from backend.services.vlm_roi import vlm_roi_service
 from backend.services.mndot_client import mndot_client
 
@@ -126,6 +128,41 @@ async def calibrate_camera(camera_id: str):
 
     save_projected_rois(result)
     return result
+
+
+@router.post("/camera/{camera_id}/rois/cluster")
+async def cluster_rois(camera_id: str):
+    """Generate ROIs from accumulated vehicle trajectories.
+
+    Requires that the camera has been streaming long enough to accumulate
+    trajectory data (~5-10 minutes of traffic).
+    """
+    status = trajectory_cluster_service.get_status(camera_id)
+    min_needed = settings.cluster_min_force
+
+    if status["count"] < min_needed:
+        raise HTTPException(
+            status_code=425,
+            detail=(
+                f"Not enough trajectory data yet. Have {status['count']} trajectories, "
+                f"need at least {min_needed}. Stream the camera for ~5 minutes first."
+            ),
+        )
+
+    result = trajectory_cluster_service.force_generate(camera_id)
+    if result is None:
+        raise HTTPException(
+            status_code=422,
+            detail="No road-direction groups could form valid ROI polygons.",
+        )
+
+    return result.model_dump()
+
+
+@router.get("/camera/{camera_id}/rois/cluster/status")
+async def cluster_status(camera_id: str):
+    """Check trajectory accumulation status for a camera."""
+    return trajectory_cluster_service.get_status(camera_id)
 
 
 def _get_camera_utm(camera_id: str) -> tuple[float | None, float | None]:
