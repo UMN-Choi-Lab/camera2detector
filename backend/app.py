@@ -64,5 +64,8 @@ app.include_router(clearguide.router, prefix="/api")
 async def roi_tool():
     return FileResponse("frontend/roi_tool.html")
 
+# StaticFiles validates the directory at construction (import) time, so it must
+# exist before mounting. It is gitignored runtime data, absent in fresh containers.
+Path("data/roi_tests").mkdir(parents=True, exist_ok=True)
 app.mount("/roi-tests", StaticFiles(directory="data/roi_tests"), name="roi-tests")
 app.mount("/", StaticFiles(directory="frontend", html=True), name="frontend")
