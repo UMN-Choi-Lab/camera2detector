@@ -340,14 +340,18 @@ class StreamWorker:
         )
         self.roi_invalidated = False
 
-        # Per-camera YOLO model instance (shares GPU weights, owns tracker state)
-        self._model = None
+        # Per-camera YOLO model instances (near + far dual tracker)
+        self._model_near = None
+        self._model_far = None
 
     def _load_model(self):
         from ultralytics import YOLO
 
-        self._model = YOLO(settings.yolo_model)
-        logger.info("Loaded YOLO model for camera %s", self.camera_id)
+        self._model_near = YOLO(settings.yolo_model)
+        self._model_far = YOLO(settings.yolo_model)
+        # Legacy alias for any code referencing self._model
+        self._model = self._model_near
+        logger.info("Loaded dual YOLO models for camera %s", self.camera_id)
 
     async def run(self):
         """Main loop with reconnection."""
@@ -625,9 +629,20 @@ class StreamWorker:
             self.connected = False
 
 
+    # Far-lane track IDs are offset to avoid collisions with near-lane IDs
+    _FAR_TRACK_OFFSET = 100000
+
     def _track_frame(self, frame: np.ndarray) -> list[dict]:
-        """Run model.track() on a single frame (called in thread pool)."""
-        results = self._model.track(
+        """Run dual-tracker on a single frame (called in thread pool).
+
+        Near tracker: full frame at native 720x480.
+        Far tracker: top 55% of frame upscaled 2x for small vehicle detection.
+        Results are merged with separate track ID spaces.
+        """
+        h, w = frame.shape[:2]
+
+        # ── Near tracker: full frame ──
+        near_results = self._model_near.track(
             frame,
             conf=settings.yolo_confidence,
             persist=True,
@@ -637,29 +652,74 @@ class StreamWorker:
         )
 
         detections = []
-        for r in results:
+        for r in near_results:
             if r.boxes is None:
                 continue
             for box in r.boxes:
                 cls_id = int(box.cls[0])
                 x1, y1, x2, y2 = box.xyxy[0].tolist()
                 track_id = int(box.id[0]) if box.id is not None else None
-                detections.append(
-                    {
-                        "x1": x1,
-                        "y1": y1,
-                        "x2": x2,
-                        "y2": y2,
-                        "cx": (x1 + x2) / 2,
-                        "cy": (y1 + y2) / 2,
-                        "label": r.names[cls_id],
-                        "confidence": float(box.conf[0]),
-                        "track_id": track_id,
-                    }
-                )
+                detections.append({
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "cx": (x1 + x2) / 2, "cy": (y1 + y2) / 2,
+                    "label": r.names[cls_id],
+                    "confidence": float(box.conf[0]),
+                    "track_id": track_id,
+                })
 
-        # Deduplicate by track_id — ByteTrack can assign the same ID to
-        # overlapping detections that NMS didn't merge. Keep highest confidence.
+        # ── Far tracker: crop top 55%, upscale 2x ──
+        crop_h = int(h * 0.55)
+        crop = frame[:crop_h, :]
+        crop_2x = cv2.resize(crop, (w * 2, crop_h * 2), interpolation=cv2.INTER_LINEAR)
+
+        far_results = self._model_far.track(
+            crop_2x,
+            conf=settings.yolo_confidence,
+            persist=True,
+            tracker=settings.yolo_tracker,
+            verbose=False,
+            classes=settings.vehicle_classes,
+        )
+
+        # Map far detections back to original frame coordinates (÷2)
+        # and offset track IDs to avoid collision with near tracker
+        far_dets = []
+        for r in far_results:
+            if r.boxes is None:
+                continue
+            for box in r.boxes:
+                cls_id = int(box.cls[0])
+                x1, y1, x2, y2 = [v / 2 for v in box.xyxy[0].tolist()]
+                track_id = (int(box.id[0]) + self._FAR_TRACK_OFFSET) if box.id is not None else None
+                far_dets.append({
+                    "x1": x1, "y1": y1, "x2": x2, "y2": y2,
+                    "cx": (x1 + x2) / 2, "cy": (y1 + y2) / 2,
+                    "label": r.names[cls_id],
+                    "confidence": float(box.conf[0]),
+                    "track_id": track_id,
+                })
+
+        # ── Merge: keep far dets that don't overlap with near dets ──
+        for fd in far_dets:
+            overlaps = False
+            for nd in detections:
+                # Simple IoU check
+                ix1 = max(fd["x1"], nd["x1"])
+                iy1 = max(fd["y1"], nd["y1"])
+                ix2 = min(fd["x2"], nd["x2"])
+                iy2 = min(fd["y2"], nd["y2"])
+                if ix1 < ix2 and iy1 < iy2:
+                    inter = (ix2 - ix1) * (iy2 - iy1)
+                    area_fd = (fd["x2"] - fd["x1"]) * (fd["y2"] - fd["y1"])
+                    area_nd = (nd["x2"] - nd["x1"]) * (nd["y2"] - nd["y1"])
+                    iou = inter / (area_fd + area_nd - inter)
+                    if iou > 0.3:
+                        overlaps = True
+                        break
+            if not overlaps:
+                detections.append(fd)
+
+        # Deduplicate by track_id within each space
         if detections:
             best: dict[int | None, dict] = {}
             no_id = []

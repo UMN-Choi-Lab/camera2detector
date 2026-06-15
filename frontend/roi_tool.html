@@ -370,6 +370,45 @@
 
         #btn-cancel-polygon:hover { background: rgba(255, 255, 255, 0.05); }
 
+        #btn-save-edits {
+            background: #10b981;
+            color: #fff;
+            border: none;
+            border-radius: 4px;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.8rem;
+            font-weight: 600;
+            cursor: pointer;
+        }
+
+        #btn-save-edits:hover { background: #059669; }
+
+        #btn-cancel-edits {
+            background: transparent;
+            color: #888;
+            border: 1px solid #555;
+            border-radius: 4px;
+            padding: 0.35rem 0.75rem;
+            font-size: 0.8rem;
+            cursor: pointer;
+        }
+
+        #btn-cancel-edits:hover { background: rgba(255, 255, 255, 0.05); }
+
+        .roi-item-edit {
+            background: transparent;
+            color: #fbbf24;
+            border: none;
+            cursor: pointer;
+            font-size: 0.75rem;
+            padding: 0.1rem 0.4rem;
+            border-radius: 3px;
+            margin-right: 0.2rem;
+        }
+
+        .roi-item-edit:hover { background: rgba(251, 191, 36, 0.2); }
+        .roi-item-edit.active { background: rgba(251, 191, 36, 0.3); }
+
         /* Keyboard shortcuts help */
         .shortcuts {
             font-size: 0.7rem;
@@ -478,13 +517,28 @@
                 </div>
             </div>
 
+            <!-- Vertex Editor (hidden until edit mode) -->
+            <div class="ctrl-section hidden" id="vertex-editor">
+                <h4>Editing Vertices</h4>
+                <div class="draw-hint" id="vertex-editor-label"></div>
+                <div class="shortcuts" style="margin-bottom:0.5rem;">
+                    <kbd>Drag</kbd> move vertex<br>
+                    <kbd>Dbl-click edge</kbd> insert vertex<br>
+                    <kbd>Shift+click</kbd> delete vertex
+                </div>
+                <div class="draw-form-buttons">
+                    <button id="btn-save-edits">Save Edits</button>
+                    <button id="btn-cancel-edits">Cancel</button>
+                </div>
+            </div>
+
             <!-- Shortcuts -->
             <div class="ctrl-section">
                 <h4>Shortcuts</h4>
                 <div class="shortcuts">
                     <kbd>&larr;</kbd> <kbd>&rarr;</kbd> Prev / Next camera<br>
                     <kbd>D</kbd> Toggle draw mode<br>
-                    <kbd>Esc</kbd> Cancel polygon / exit draw<br>
+                    <kbd>Esc</kbd> Cancel polygon / exit mode<br>
                     <kbd>G</kbd> Auto-generate ROIs
                 </div>
             </div>

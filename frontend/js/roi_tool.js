@@ -4,39 +4,44 @@
  */
 
 (function () {
-    // ─── 30 I-94 cameras (west → east) ───
-    const CAMERAS = [
-        { id: 'C805', desc: 'I-94 EB E of Brockton Ln' },
-        { id: 'C809', desc: 'I-94 EB (Elm Creek)' },
-        { id: 'C811', desc: 'I-94 EB @ I-494 SB' },
-        { id: 'C813', desc: 'I-94 EB @ U.S.169' },
-        { id: 'C814', desc: 'I-94 EB @ Boone Ave' },
-        { id: 'C816', desc: 'I-94 EB @ Zane Ave' },
-        { id: 'C818', desc: 'I-94 WB @ Xerxes Ave' },
-        { id: 'C820', desc: 'I-94 EB @ 57th Ave' },
-        { id: 'C822', desc: 'I-94 EB @ 42nd Ave' },
-        { id: 'C824', desc: 'I-94 NB @ Broadway Ave' },
-        { id: 'C832', desc: 'I-94 EB @ Lyndale Ave' },
-        { id: 'C834', desc: 'I-94 WB @ T.H.65' },
-        { id: 'C836', desc: 'I-94 EB E of Cedar Ave' },
-        { id: 'C838', desc: 'I-94 WB @ Huron Blvd' },
-        { id: 'C839', desc: 'I-94 EB @ Franklin Ave' },
-        { id: 'C840', desc: 'I-94 EB W of T.H.280' },
-        { id: 'C841', desc: 'I-94 EB @ T.H.280' },
-        { id: 'C843', desc: 'I-94 EB @ Prior Ave' },
-        { id: 'C844', desc: 'I-94 EB @ Snelling Ave' },
-        { id: 'C845', desc: 'I-94 EB @ Hamline Ave' },
-        { id: 'C848', desc: 'I-94 EB @ Western Ave' },
-        { id: 'C850', desc: 'I-94 EB @ Wabasha St' },
-        { id: 'C852', desc: 'I-94 WB @ I-35E NB' },
-        { id: 'C855', desc: 'I-94 EB @ Mounds Blvd' },
-        { id: 'C856', desc: 'I-94 EB @ Johnson Pkwy' },
-        { id: 'C858', desc: 'I-94 EB @ White Bear Ave' },
-        { id: 'C860', desc: 'I-94 EB @ T.H.120' },
-        { id: 'C862', desc: 'I-94 EB @ Co Rd 13' },
-        { id: 'C865', desc: 'I-94 WB @ Manning Ave' },
-        { id: 'C866', desc: 'I-94 WB @ Co Rd 71' },
-    ];
+    // ─── Curated I-94 camera descriptions (west → east) ───
+    // The full camera list is fetched dynamically from /api/cameras?road=I-94.
+    // Any ID not in this map uses its raw ID as the label.
+    const CURATED_DESCRIPTIONS = {
+        'C805': 'I-94 EB E of Brockton Ln',
+        'C809': 'I-94 EB (Elm Creek)',
+        'C811': 'I-94 EB @ I-494 SB',
+        'C813': 'I-94 EB @ U.S.169',
+        'C814': 'I-94 EB @ Boone Ave',
+        'C816': 'I-94 EB @ Zane Ave',
+        'C818': 'I-94 WB @ Xerxes Ave',
+        'C820': 'I-94 EB @ 57th Ave',
+        'C822': 'I-94 EB @ 42nd Ave',
+        'C824': 'I-94 NB @ Broadway Ave',
+        'C832': 'I-94 EB @ Lyndale Ave',
+        'C834': 'I-94 WB @ T.H.65',
+        'C836': 'I-94 EB E of Cedar Ave',
+        'C838': 'I-94 WB @ Huron Blvd',
+        'C839': 'I-94 EB @ Franklin Ave',
+        'C840': 'I-94 EB W of T.H.280',
+        'C841': 'I-94 EB @ T.H.280',
+        'C843': 'I-94 EB @ Prior Ave',
+        'C844': 'I-94 EB @ Snelling Ave',
+        'C845': 'I-94 EB @ Hamline Ave',
+        'C848': 'I-94 EB @ Western Ave',
+        'C850': 'I-94 EB @ Wabasha St',
+        'C852': 'I-94 WB @ I-35E NB',
+        'C855': 'I-94 EB @ Mounds Blvd',
+        'C856': 'I-94 EB @ Johnson Pkwy',
+        'C858': 'I-94 EB @ White Bear Ave',
+        'C860': 'I-94 EB @ T.H.120',
+        'C862': 'I-94 EB @ Co Rd 13',
+        'C865': 'I-94 WB @ Manning Ave',
+        'C866': 'I-94 WB @ Co Rd 71',
+    };
+
+    // Populated by loadCameras(); maintained in west→east (numeric ID) order.
+    let CAMERAS = [];
 
     const ROI_COLORS = ['#a855f7', '#3b82f6', '#ef4444', '#f59e0b', '#10b981', '#ec4899'];
 
@@ -46,6 +51,15 @@
     let drawMode = false;
     let closedPolygon = null;   // pending polygon to save
     let roiStatusMap = {};      // camera_id -> boolean (has ROIs)
+
+    // Vertex-edit mode state
+    let editMode = false;
+    let editRoiId = null;
+    let editVertices = null;    // array of {x, y} in image coords
+    let draggingIdx = -1;
+    let hoverIdx = -1;
+    const VERTEX_PICK_RADIUS = 10;   // px in canvas space
+    const EDGE_PICK_RADIUS = 8;
 
     // ─── DOM refs ───
     const imageEl = document.getElementById('roi-image');
@@ -65,15 +79,70 @@
     const btnClearAll = document.getElementById('btn-clear-all');
     const btnSavePoly = document.getElementById('btn-save-polygon');
     const btnCancelPoly = document.getElementById('btn-cancel-polygon');
+    const vertexEditor = document.getElementById('vertex-editor');
+    const vertexEditorLabel = document.getElementById('vertex-editor-label');
+    const btnSaveEdits = document.getElementById('btn-save-edits');
+    const btnCancelEdits = document.getElementById('btn-cancel-edits');
     const btnPrev = document.getElementById('btn-prev');
     const btnNext = document.getElementById('btn-next');
 
     // ─── Init ───
-    buildCameraList();
     initROIEditor();
     bindEvents();
-    // Pre-check which cameras have ROIs
-    checkAllROIStatus();
+    loadCameras().then(() => {
+        buildCameraList();
+        checkAllROIStatus();
+    });
+
+    async function loadCameras() {
+        // Fetch I-94 cameras from backend. Filter to the urban corridor
+        // (C800-C870) to keep the list manageable; anything outside this
+        // range can still appear if it already has an ROI file saved.
+        const CORRIDOR_MIN = 800;
+        const CORRIDOR_MAX = 870;
+        const numeric = (id) => parseInt(id.replace(/\D/g, ''), 10) || 0;
+
+        try {
+            const [camResp, roiResp] = await Promise.all([
+                fetch('/api/cameras?road=I-94'),
+                fetch('/api/cameras/rois/list').catch(() => null),
+            ]);
+            const list = await camResp.json();
+
+            // Also include any camera that already has an ROI file, even if
+            // outside the corridor range.
+            let roiIds = new Set();
+            if (roiResp && roiResp.ok) {
+                try {
+                    const rois = await roiResp.json();
+                    (rois.cameras || []).forEach(id => roiIds.add(id));
+                } catch { /* endpoint may not exist */ }
+            }
+
+            const byId = new Map();
+            list.forEach(c => {
+                const n = numeric(c.id);
+                if ((n >= CORRIDOR_MIN && n <= CORRIDOR_MAX) || roiIds.has(c.id)) {
+                    byId.set(c.id, c);
+                }
+            });
+
+            CAMERAS = Array.from(byId.values())
+                .map(c => ({
+                    id: c.id,
+                    desc: CURATED_DESCRIPTIONS[c.id] || c.id,
+                }))
+                .sort((a, b) => numeric(a.id) - numeric(b.id));
+
+            document.querySelector('#camera-list-header span').textContent =
+                `I-94 Cameras (${CAMERAS.length})`;
+        } catch (err) {
+            console.error('Failed to load cameras:', err);
+            // Fallback to curated IDs only
+            CAMERAS = Object.keys(CURATED_DESCRIPTIONS)
+                .map(id => ({ id, desc: CURATED_DESCRIPTIONS[id] }));
+        }
+    }
 
     // ─── Camera list ───
     function buildCameraList() {
@@ -129,8 +198,9 @@
     async function selectCamera(index) {
         if (index < 0 || index >= CAMERAS.length) return;
 
-        // Exit draw mode if active
+        // Exit any active modes
         if (drawMode) exitDrawMode();
+        if (editMode) exitEditMode();
 
         currentIndex = index;
         const cam = CAMERAS[index];
@@ -194,14 +264,17 @@
         const scaleY = canvasEl.height / (currentROIs.image_height || imageEl.naturalHeight);
 
         currentROIs.rois.forEach(roi => {
-            const poly = roi.polygon;
+            const isEditing = editMode && roi.roi_id === editRoiId;
+            const poly = isEditing
+                ? editVertices.map(v => [v.x, v.y])
+                : roi.polygon;
             if (!poly || poly.length < 3) return;
 
             const color = roi.color || '#a855f7';
 
             // Fill
             ctx.save();
-            ctx.globalAlpha = 0.15;
+            ctx.globalAlpha = isEditing ? 0.25 : 0.15;
             ctx.fillStyle = color;
             ctx.beginPath();
             ctx.moveTo(poly[0][0] * scaleX, poly[0][1] * scaleY);
@@ -214,7 +287,7 @@
 
             // Border
             ctx.strokeStyle = color;
-            ctx.lineWidth = 2;
+            ctx.lineWidth = isEditing ? 3 : 2;
             ctx.beginPath();
             ctx.moveTo(poly[0][0] * scaleX, poly[0][1] * scaleY);
             for (let i = 1; i < poly.length; i++) {
@@ -222,6 +295,34 @@
             }
             ctx.closePath();
             ctx.stroke();
+
+            // Vertex handles when editing
+            if (isEditing) {
+                // Edge midpoint markers (small) for insert hint
+                for (let i = 0; i < poly.length; i++) {
+                    const j = (i + 1) % poly.length;
+                    const mx = ((poly[i][0] + poly[j][0]) / 2) * scaleX;
+                    const my = ((poly[i][1] + poly[j][1]) / 2) * scaleY;
+                    ctx.beginPath();
+                    ctx.arc(mx, my, 3, 0, Math.PI * 2);
+                    ctx.fillStyle = 'rgba(255,255,255,0.6)';
+                    ctx.fill();
+                }
+                // Vertex handles (large, draggable)
+                poly.forEach((p, i) => {
+                    const px = p[0] * scaleX;
+                    const py = p[1] * scaleY;
+                    const isHover = i === hoverIdx;
+                    const isDrag = i === draggingIdx;
+                    ctx.beginPath();
+                    ctx.arc(px, py, isHover || isDrag ? 7 : 5, 0, Math.PI * 2);
+                    ctx.fillStyle = isDrag ? '#10b981' : (isHover ? '#fbbf24' : '#fff');
+                    ctx.fill();
+                    ctx.strokeStyle = color;
+                    ctx.lineWidth = 2;
+                    ctx.stroke();
+                });
+            }
 
             // Label at centroid
             let cx = 0, cy = 0;
@@ -239,6 +340,124 @@
             ctx.fillStyle = '#fff';
             ctx.fillText(label, cx - textW / 2, cy + 5);
         });
+    }
+
+    // ─── Vertex edit helpers ───
+    function _imageScale() {
+        return {
+            sx: canvasEl.width / (currentROIs?.image_width || imageEl.naturalWidth),
+            sy: canvasEl.height / (currentROIs?.image_height || imageEl.naturalHeight),
+        };
+    }
+
+    function _canvasFromEvent(e) {
+        const rect = canvasEl.getBoundingClientRect();
+        const scaleX = canvasEl.width / rect.width;
+        const scaleY = canvasEl.height / rect.height;
+        return {
+            cx: (e.clientX - rect.left) * scaleX,
+            cy: (e.clientY - rect.top) * scaleY,
+        };
+    }
+
+    function _hitVertex(cx, cy) {
+        if (!editVertices) return -1;
+        const { sx, sy } = _imageScale();
+        for (let i = 0; i < editVertices.length; i++) {
+            const px = editVertices[i].x * sx;
+            const py = editVertices[i].y * sy;
+            if (Math.hypot(cx - px, cy - py) <= VERTEX_PICK_RADIUS) return i;
+        }
+        return -1;
+    }
+
+    function _hitEdgeMidpoint(cx, cy) {
+        if (!editVertices) return -1;
+        const { sx, sy } = _imageScale();
+        const n = editVertices.length;
+        for (let i = 0; i < n; i++) {
+            const j = (i + 1) % n;
+            const mx = ((editVertices[i].x + editVertices[j].x) / 2) * sx;
+            const my = ((editVertices[i].y + editVertices[j].y) / 2) * sy;
+            if (Math.hypot(cx - mx, cy - my) <= EDGE_PICK_RADIUS) return i;
+        }
+        return -1;
+    }
+
+    function enterEditMode(roiId) {
+        const roi = currentROIs.rois.find(r => r.roi_id === roiId);
+        if (!roi || !roi.polygon || roi.polygon.length < 3) return;
+
+        // Exit draw mode if active
+        if (drawMode) exitDrawMode();
+
+        editMode = true;
+        editRoiId = roiId;
+        editVertices = roi.polygon.map(p => ({ x: p[0], y: p[1] }));
+        draggingIdx = -1;
+        hoverIdx = -1;
+
+        vertexEditor.classList.remove('hidden');
+        vertexEditorLabel.textContent = `${roi.road_name} ${roi.direction}`;
+        canvasEl.style.pointerEvents = 'auto';
+        canvasEl.style.cursor = 'default';
+        ctrlStatus.textContent = 'Edit: drag vertices, dbl-click edge to insert, shift+click to delete';
+
+        updateROIList();
+        drawAllROIs();
+    }
+
+    function exitEditMode() {
+        editMode = false;
+        editRoiId = null;
+        editVertices = null;
+        draggingIdx = -1;
+        hoverIdx = -1;
+
+        vertexEditor.classList.add('hidden');
+        canvasEl.style.pointerEvents = 'none';
+        canvasEl.style.cursor = 'default';
+
+        updateROIList();
+        drawAllROIs();
+    }
+
+    async function saveEdits() {
+        if (!editMode || !currentROIs) return;
+        const cam = CAMERAS[currentIndex];
+
+        // Build updated ROI list: replace the edited one, leave others intact
+        const updatedRois = currentROIs.rois.map(r => {
+            if (r.roi_id === editRoiId) {
+                return { ...r, polygon: editVertices.map(v => [v.x, v.y]) };
+            }
+            return r;
+        });
+
+        const payload = {
+            camera_id: cam.id,
+            image_width: currentROIs.image_width || canvasEl.width,
+            image_height: currentROIs.image_height || canvasEl.height,
+            rois: updatedRois,
+            generated_at: new Date().toISOString(),
+            source: 'manual',
+        };
+
+        try {
+            const resp = await fetch(`/api/camera/${cam.id}/rois`, {
+                method: 'PUT',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify(payload),
+            });
+            currentROIs = await resp.json();
+            ctrlStatus.textContent = 'Edits saved';
+            updateROIStatusForCurrent();
+        } catch (err) {
+            console.error('Failed to save edits:', err);
+            ctrlStatus.textContent = 'Save failed';
+            return;
+        }
+        exitEditMode();
     }
 
     function drawClosedPolygonPreview(polygon) {
@@ -267,6 +486,7 @@
         }
 
         currentROIs.rois.forEach(roi => {
+            const isEditing = editMode && roi.roi_id === editRoiId;
             const item = document.createElement('div');
             item.className = 'roi-item';
             item.innerHTML = `
@@ -274,15 +494,31 @@
                     <span class="roi-item-swatch" style="background:${roi.color || '#a855f7'}"></span>
                     ${roi.road_name} ${roi.direction}
                 </span>
-                <button class="roi-item-delete" data-roi-id="${roi.roi_id}" title="Delete">x</button>
+                <span style="display:flex;gap:0.1rem;">
+                    <button class="roi-item-edit ${isEditing ? 'active' : ''}" data-roi-id="${roi.roi_id}" title="Edit vertices">edit</button>
+                    <button class="roi-item-delete" data-roi-id="${roi.roi_id}" title="Delete">x</button>
+                </span>
             `;
             ctrlRoiList.appendChild(item);
+        });
+
+        // Edit handlers
+        ctrlRoiList.querySelectorAll('.roi-item-edit').forEach(btn => {
+            btn.addEventListener('click', (e) => {
+                const roiId = e.target.dataset.roiId;
+                if (editMode && roiId === editRoiId) {
+                    exitEditMode();
+                } else {
+                    enterEditMode(roiId);
+                }
+            });
         });
 
         // Delete handlers
         ctrlRoiList.querySelectorAll('.roi-item-delete').forEach(btn => {
             btn.addEventListener('click', async (e) => {
                 const roiId = e.target.dataset.roiId;
+                if (editMode && roiId === editRoiId) exitEditMode();
                 const cam = CAMERAS[currentIndex];
                 try {
                     await fetch(`/api/camera/${cam.id}/rois/${roiId}`, { method: 'DELETE' });
@@ -379,19 +615,92 @@
         ROIEditor.ctx = ctx;
         ROIEditor.imageEl = imageEl;
 
-        // Attach events (same as ROIEditor.init but for our elements)
-        canvasEl.addEventListener('click', (e) => ROIEditor._onClick(e));
+        // Click: draw-mode vertex placement OR edit-mode shift-delete
+        canvasEl.addEventListener('click', (e) => {
+            if (editMode) {
+                // Shift-click → delete vertex
+                if (e.shiftKey) {
+                    const { cx, cy } = _canvasFromEvent(e);
+                    const idx = _hitVertex(cx, cy);
+                    if (idx >= 0 && editVertices.length > 3) {
+                        editVertices.splice(idx, 1);
+                        hoverIdx = -1;
+                        drawAllROIs();
+                    }
+                }
+                return;  // don't fall through to draw mode
+            }
+            ROIEditor._onClick(e);
+        });
+
+        // Mousemove: draw preview OR edit drag/hover
         canvasEl.addEventListener('mousemove', (e) => {
+            if (editMode) {
+                const { cx, cy } = _canvasFromEvent(e);
+                if (draggingIdx >= 0) {
+                    // Drag vertex in image coords
+                    const { sx, sy } = _imageScale();
+                    editVertices[draggingIdx].x = cx / sx;
+                    editVertices[draggingIdx].y = cy / sy;
+                    drawAllROIs();
+                } else {
+                    const newHover = _hitVertex(cx, cy);
+                    if (newHover !== hoverIdx) {
+                        hoverIdx = newHover;
+                        canvasEl.style.cursor = hoverIdx >= 0 ? 'grab' : 'default';
+                        drawAllROIs();
+                    }
+                }
+                return;
+            }
             if (ROIEditor.active && ROIEditor.vertices.length > 0) {
-                // Redraw everything, then draw in-progress polygon
                 drawAllROIs();
                 if (closedPolygon) drawClosedPolygonPreview(closedPolygon);
                 ROIEditor._drawPreview(ROIEditor._getCanvasCoords(e));
             }
         });
+
+        // Mousedown: begin vertex drag
+        canvasEl.addEventListener('mousedown', (e) => {
+            if (!editMode || e.shiftKey) return;
+            const { cx, cy } = _canvasFromEvent(e);
+            const idx = _hitVertex(cx, cy);
+            if (idx >= 0) {
+                draggingIdx = idx;
+                canvasEl.style.cursor = 'grabbing';
+                e.preventDefault();
+            }
+        });
+
+        // Mouseup: end drag (on window so drag survives leaving canvas)
+        window.addEventListener('mouseup', () => {
+            if (draggingIdx >= 0) {
+                draggingIdx = -1;
+                canvasEl.style.cursor = hoverIdx >= 0 ? 'grab' : 'default';
+                drawAllROIs();
+            }
+        });
+
+        // Double-click: insert vertex on nearest edge midpoint
+        canvasEl.addEventListener('dblclick', (e) => {
+            if (!editMode) return;
+            const { cx, cy } = _canvasFromEvent(e);
+            const edgeIdx = _hitEdgeMidpoint(cx, cy);
+            if (edgeIdx >= 0) {
+                const i = edgeIdx;
+                const j = (i + 1) % editVertices.length;
+                const mid = {
+                    x: (editVertices[i].x + editVertices[j].x) / 2,
+                    y: (editVertices[i].y + editVertices[j].y) / 2,
+                };
+                editVertices.splice(j, 0, mid);
+                drawAllROIs();
+            }
+        });
     }
 
     function enterDrawMode() {
+        if (editMode) exitEditMode();
         drawMode = true;
         closedPolygon = null;
         btnDrawMode.classList.add('active');
@@ -500,6 +809,8 @@
         btnClearAll.addEventListener('click', clearAllROIs);
         btnSavePoly.addEventListener('click', savePolygon);
         btnCancelPoly.addEventListener('click', cancelPolygon);
+        btnSaveEdits.addEventListener('click', saveEdits);
+        btnCancelEdits.addEventListener('click', exitEditMode);
 
         btnPrev.addEventListener('click', () => {
             if (currentIndex > 0) selectCamera(currentIndex - 1);
@@ -523,7 +834,9 @@
                     if (currentIndex < CAMERAS.length - 1) selectCamera(currentIndex + 1);
                     break;
                 case 'Escape':
-                    if (drawMode) {
+                    if (editMode) {
+                        exitEditMode();
+                    } else if (drawMode) {
                         if (ROIEditor.hasVertices() || closedPolygon) {
                             cancelPolygon();
                         } else {

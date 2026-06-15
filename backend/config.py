@@ -50,8 +50,10 @@ class Settings(BaseSettings):
     max_concurrent_streams: int = 4
 
     # Speed estimation: pixels-per-meter calibration (camera-dependent)
-    # Default ~7.0 is rough estimate for typical MnDOT highway cameras at 720x480
-    speed_calibration_ppm: float = 7.0
+    # Speed is inversely proportional to ppm. Empirical tuning on MnDOT
+    # 720x480 highway cams showed reported speed was ~5.5x too low at ppm=7.0,
+    # so the default is lowered to 7.0 / 5.5 ≈ 1.27.
+    speed_calibration_ppm: float = 1.27
 
     # OpenAI (VLM ROI generation)
     openai_api_key: str = ""
@@ -77,7 +79,7 @@ class Settings(BaseSettings):
     cluster_simplify_px: float = 10.0     # Shapely simplify tolerance (pixels)
 
     # Default cameras to stream on startup
-    default_stream_cameras: list[str] = ["C844"]
+    default_stream_cameras: list[str] = []
 
     # Server
     host: str = "0.0.0.0"
